@@ -39,5 +39,12 @@ t('double-click room edge adds a corner, corner removes it',()=>{const r={id:910
   assert(A.editVertexAt(105,100,sp([105,100])));assert.equal(r.pts.length,4);
   const v=A.vtxPt({pts:[[0,0],[5,0.02],[5,5]]},1,5.1,0.1,{free:false});assert(v.x===5&&v.y===0,'corner lines up with neighbours');
   S.rooms=S.rooms.filter(q=>q!==r)});
+t('room width/length resize keeps left/bottom edge, refuses to cross an L notch',()=>{
+  const r={id:9200,name:'R',type:'other',grade:'D',pa:15,h:3,pts:[[0,0],[10,0],[10,4],[6,4],[6,8],[0,8]]};S.rooms.push(r);
+  assert.deepEqual(A.roomSize(r),[10,8]);assert(A.resizeRoom(r,0,12));assert.deepEqual(A.roomSize(r),[12,8]);assert.equal(r.pts[0][0],0);
+  assert(A.resizeRoom(r,1,9));assert.deepEqual(r.pts[4],[6,9]);
+  assert(!A.resizeRoom(r,0,5),'would cross the notch');assert.equal(A.roomSize(r)[0],12);S.rooms=S.rooms.filter(q=>q!==r)});
+t('delete then undo brings the room back · cancel clears a half-drawn room',()=>{const n=S.rooms.length;A.setSel('room',S.rooms[0].id);A.delSel();assert.equal(S.rooms.length,n-1);A.doUndo();assert.equal(S.rooms.length,n);
+  T.poly=[[1,1],[2,1]];assert(A.cancelDraw());assert.equal(T.poly.length,0);assert(!A.cancelDraw(),'nothing left to cancel')});
 t('DXF has entities',()=>{const d=A.dxfStr();assert(d.includes('PH-ROOM')&&d.trim().endsWith('EOF'))});
 console.log(`${ok} checks passed`);

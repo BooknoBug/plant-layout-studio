@@ -166,7 +166,7 @@ dialog::backdrop{background:rgba(0,0,0,.4)}
    room types (default grade / pressure), flow types, cleanliness grades, ACH and room-condition defaults,
    and which background layers count as walls. Values are planning defaults, not regulatory limits. */
 'use strict';
-const APP_VERSION='1.6.0';
+const APP_VERSION='1.7.0';
 const LIB=[
  {k:'press',n:'เครื่องตอกเม็ด',w:1.5,d:1.3,h:2.2,c:0.8,col:'#3b5bdb'},
  {k:'blender',n:'เครื่องผสมแห้ง',w:2.0,d:1.6,h:2.5,c:0.8,col:'#3b5bdb'},
@@ -667,7 +667,7 @@ c2.addEventListener('pointerdown',e=>{
   c2.setPointerCapture(e.pointerId);P.set(e.pointerId,pt(e));
   if(P.size===2){const[a,b]=[...P.values()];pinch={d:Math.hypot(a[0]-b[0],a[1]-b[1]),cx:(a[0]+b[0])/2,cy:(a[1]+b[1])/2,s:V.s,tx:V.tx,ty:V.ty};drag=null;return}
   const sp=pt(e),w=s2w(sp[0],sp[1]);
-  if(e.button===1||e.button===2){drag={t:'pan',sx:sp[0],sy:sp[1],tx:V.tx,ty:V.ty,moved:true};return}
+  if(e.button===1||e.button===2){drag={t:'pan',sx:sp[0],sy:sp[1],tx:V.tx,ty:V.ty,moved:true,rmb:e.button===2,far:false};return}
   const tool=T.tool;
   if(tool==='select'){
     if(T.sel&&T.sel.type==='room'){const r=getSel();if(r){for(let i=0;i<r.pts.length;i++){const p=w2s(...r.pts[i]);if(Math.hypot(p[0]-sp[0],p[1]-sp[1])<16){commit();drag={t:'vtx',r,i};return}}}}
@@ -689,7 +689,9 @@ c2.addEventListener('pointermove',e=>{
   if(pinch&&P.size===2){const[a,b]=[...P.values()],d=Math.hypot(a[0]-b[0],a[1]-b[1]),cx=(a[0]+b[0])/2,cy=(a[1]+b[1])/2,k=clamp(pinch.s*d/pinch.d,0.5,400);
     const wx=(pinch.cx-pinch.tx)/pinch.s,wy=-(pinch.cy-pinch.ty)/pinch.s;V.s=k;V.tx=cx-wx*k;V.ty=cy+wy*k;render();return}
   if(!drag){if(e.pointerType==='mouse')hoverUpdate(sp);return}
-  const mv=Math.hypot(sp[0]-drag.sx,sp[1]-drag.sy);if(mv>5)drag.moved=true;
+  /* right button pressed while dragging with the left = cancel that drag */
+  if(drag.t!=='pan'&&(e.buttons&2)){cancelDraw();return}
+  const mv=Math.hypot(sp[0]-drag.sx,sp[1]-drag.sy);if(mv>5){drag.moved=true;drag.far=true}
   const w=s2w(sp[0],sp[1]);
   switch(drag.t){
     case'pan':case'taproom':case'tap':if(drag.moved||drag.t==='pan'&&drag.moved===true){V.tx=drag.tx+(sp[0]-drag.sx);V.ty=drag.ty+(sp[1]-drag.sy);if(T.tool!=='select')hoverUpdate(sp);render()}break;
@@ -706,6 +708,7 @@ function endPointer(e){
   P.delete(e.pointerId);if(pinch){if(P.size<2)pinch=null;return}
   const d=drag;drag=null;if(!d)return;
   const sp=pt(e),w=s2w(sp[0],sp[1]);
+  if(d.t==='pan'&&d.rmb&&!d.far){cancelDraw();return}
   if(d.t==='pan'&&!d.moved&&d.desel){setSel(null);return}
   if(d.t==='pan'&&!d.moved&&d.lockMsg){toast('พื้นหลังล็อกอยู่ กด “ปลดล็อก” ก่อนลบเส้น');return}
   if(d.t==='bgbox'){T.bgBox=null;if(d.moved)hideBg(boxBg(d.p0,w));else{const h=findBg(w[0],w[1],Math.max(0.15,12/V.s));hideBg(h?[U.keys[h.k][h.i]]:[])}render();return}
@@ -774,7 +777,7 @@ window.addEventListener('keydown',e=>{
   modKey(e);
   if(e.target.closest&&e.target.closest('input,select,textarea'))return;
   if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?doRedo():doUndo();return}
-  if(e.key==='Escape'){T.poly=[];T.pend=null;T.meas=[];T.fpts=[];T.dpts=[];T.bgBox=null;setSel(null);renderCtx();render()}
+  if(e.key==='Escape'){if(!cancelDraw()){setSel(null);renderCtx();render()}}
   if(e.key==='Enter'&&T.tool==='flow')finishFlow();
   if(e.key==='Enter'&&T.tool==='poly')finishPoly();
   if((e.key==='Delete'||e.key==='Backspace')&&T.sel)delSel();
@@ -782,7 +785,22 @@ window.addEventListener('keydown',e=>{
 });
 
 /* ====================== editing actions ====================== */
-function delSel(){const o=getSel();if(!o)return;commit();const k=LK[T.sel.type];S[k]=S[k].filter(q=>q.id!==o.id);T.sel=null;changed()}
+function delSel(){const o=getSel();if(!o)return;commit();const k=LK[T.sel.type];S[k]=S[k].filter(q=>q.id!==o.id);T.sel=null;changed();toast(`ลบ “${o.name||'รายการ'}” แล้ว · กด Ctrl+Z เพื่อเอาคืน`)}
+/* room width (axis 0, x) / length (axis 1, y): the far edge moves, the near (left/bottom) edge stays */
+function roomSize(r){const xs=r.pts.map(p=>p[0]),ys=r.pts.map(p=>p[1]);return[Math.max(...xs)-Math.min(...xs),Math.max(...ys)-Math.min(...ys)]}
+function resizeRoom(r,ax,val){val=r2(val);const cs=r.pts.map(p=>p[ax]),lo=Math.min(...cs),hi=Math.max(...cs),nh=r2(lo+val);
+  if(val<0.3){toast('ขนาดต้องอย่างน้อย 0.3 ม.');return false}
+  if(Math.abs(nh-hi)<1e-9)return true;
+  if(r.pts.some(p=>Math.abs(p[ax]-hi)>1e-6&&p[ax]>=nh-0.05)){toast('ย่อเท่านี้ไม่ได้ จะทับมุมด้านในของห้อง ให้ลากมุมแทน');return false}
+  commit();for(const p of r.pts)if(Math.abs(p[ax]-hi)<=1e-6)p[ax]=nh;changed();return true}
+/* cancel what is being drawn or dragged (right-click, or Esc) */
+function cancelDraw(){let did=false;const d=drag;
+  if(d&&['rect','vtx','move','moveroom','movepts','bgbox'].includes(d.t)){drag=null;did=true;
+    if(d.t==='vtx'||d.committed){const sel=T.sel;restore(undo.pop());updHist();if(sel&&getSelBy(sel))setSel(sel.type,sel.id)}}
+  if(T.poly.length||T.pend||T.meas.length||T.fpts.length||T.dpts.length||T.bgBox)did=true;
+  T.poly=[];T.pend=null;T.meas=[];T.fpts=[];T.dpts=[];T.bgBox=null;
+  if(did){renderCtx();render();toast('ยกเลิกแล้ว')}return did}
+const getSelBy=s=>(S[LK[s.type]]||[]).find(o=>o.id===s.id);
 function rotSel(){const o=getSel();if(!o||T.sel.type!=='machine')return;commit();o.rot=((o.rot||0)+90)%360;changed()}
 function dupSel(){const o=getSel();if(!o||!(T.sel.type==='machine'||T.sel.type==='door'))return;commit();const c=JSON.parse(JSON.stringify(o));c.id=nextId++;if(c.x!=null){c.x=r2(c.x+1);c.y=r2(c.y+1)}(T.sel.type==='machine'?S.machines:S.doors).push(c);setSel(T.sel.type,c.id);changed()}
 
@@ -798,7 +816,7 @@ function renderCtx(){
   else if(T.tool==='door')h=DOORS.map(l=>`<button class="chip" data-door="${l.k}" aria-pressed="${T.door.k===l.k}">${esc(l.n)}</button>`).join('')+'<span class="hint">แตะที่ผนัง บานจะวางตามแนวผนังให้</span>';
   else if(T.tool==='room'||T.tool==='poly'){
     const rt=RTYPES.map(t=>`<button class="chip" data-rtype="${t.k}" aria-pressed="${T.rtype===t.k}">${esc(t.n)} · ${t.pa}</button>`).join('');
-    h=(T.tool==='room'?'<span class="hint">ลากเป็นสี่เหลี่ยม หรือแตะ 2 มุม · ประเภท:</span>':`<button class="chip go" data-act="polydone">เสร็จ (${T.poly.length} จุด)</button><button class="chip" data-act="polyundo">ลบจุดล่าสุด</button><span class="hint">แตะทีละมุม เส้นเกือบตรงจะล็อกฉากให้ (⟂) · Shift ล็อกเสมอ · Ctrl เส้นเอียงอิสระ · ประเภท:</span>`)+rt}
+    h=(T.tool==='room'?'<span class="hint">ลากเป็นสี่เหลี่ยม หรือแตะ 2 มุม · คลิกขวา/Esc = ยกเลิก · ประเภท:</span>':`<button class="chip go" data-act="polydone">เสร็จ (${T.poly.length} จุด)</button><button class="chip" data-act="polyundo">ลบจุดล่าสุด</button><span class="hint">แตะทีละมุม เส้นเกือบตรงจะล็อกฉากให้ (⟂) · Shift ล็อกเสมอ · Ctrl เส้นเอียงอิสระ · คลิกขวา/Esc = ยกเลิก · ประเภท:</span>`)+rt}
   else if(T.tool==='flow')h=FLOWS.map(f=>`<button class="chip" data-flow="${f.k}" aria-pressed="${T.flow.k===f.k}"><span class="sw" style="background:${f.col}"></span>${esc(f.n)}</button>`).join('')+`<button class="chip go" data-act="flowdone">เสร็จ (${T.fpts.length} จุด)</button><button class="chip" data-act="flowundo">ลบจุดล่าสุด</button><span class="hint">แตะทีละจุดตามทางเดิน แตะจุดสุดท้ายซ้ำเพื่อจบ</span>`;
   else if(T.tool==='dim')h='<span class="hint">แตะ 2 จุดเพื่อเขียนเส้นบอกขนาด (มม.) ค้างไว้บนแบบ</span>';
   else if(T.tool==='bg')h=`<button class="chip${T.bgLock?'':' go'}" data-act="bglock">${T.bgLock?'🔒 ล็อกอยู่ · แตะเพื่อปลดล็อก':'🔓 ปลดล็อกแล้ว · แตะเพื่อล็อก'}</button>`
@@ -845,10 +863,13 @@ function propsHTML(){
     <label>เกรดความสะอาด<select data-p="grade">${GRADES.map(g=>`<option ${g===o.grade?'selected':''}>${g}</option>`).join('')}</select></label>
     <label>ความดัน (Pa)<input type="number" step="1" data-p="pa" value="${o.pa}"></label>
     <label>ความสูงผนัง (ม.)<input type="number" step="0.1" min="2" data-p="h" value="${o.h}"></label>
-    <label>พื้นที่ (ตร.ม.)<input readonly value="${fmt(areaOf(o),1)}"></label></div>
+    <label>กว้าง ↔ (ม.)<input type="number" step="0.1" min="0.3" data-dim="0" value="${fmt(roomSize(o)[0],2)}"></label>
+    <label>ยาว ↕ (ม.)<input type="number" step="0.1" min="0.3" data-dim="1" value="${fmt(roomSize(o)[1],2)}"></label>
+    <label>พื้นที่ (ตร.ม.)<input readonly value="${fmt(areaOf(o),1)}"></label>
+    <label>ปริมาตร (ลบ.ม.)<input readonly value="${fmt(areaOf(o)*(+o.h||0),1)}"></label></div>
     <div class="pa">${PA_PRESETS.map(v=>`<button data-act="pa" data-v="${v}">${v} Pa</button>`).join('')}</div>
     <div class="row"><button class="btn dng" data-act="del">ลบห้อง</button></div>
-    <p class="muted">ลากจุดวงกลมที่มุมเพื่อปรับรูปทรง ลากในห้องเพื่อย้ายทั้งห้อง</p>`;
+    <p class="muted">พิมพ์กว้าง/ยาวแล้วกด Enter: มุมซ้ายล่างอยู่ที่เดิม ขยายไปทางขวา/ขึ้นบน · ลากจุดวงกลมที่มุมเพื่อปรับรูปทรง · ลากในห้องเพื่อย้ายทั้งห้อง · เผลอลบหรือแก้ผิด กด Ctrl+Z</p>`;
   if(t==='machine')return `<h3>เครื่องจักร</h3><div class="f">
     <label class="w">ชื่อ<input data-p="name" value="${esc(o.name)}"></label>
     <label>กว้าง (ม.)<input type="number" step="0.05" min="0.1" data-p="w" value="${o.w}"></label>
@@ -937,7 +958,8 @@ $('#pane').addEventListener('input',e=>{
   if(t.dataset.lay){U.vis[t.dataset.lay]=t.checked;render();return}
   if(t.dataset.txt!==undefined){U.showText=t.checked;render()}
 });
-$('#pane').addEventListener('change',e=>{const t=e.target;if(t.dataset.p&&['grade','dbl','type','kind'].includes(t.dataset.p)){renderDock()}if(t.dataset.ach){renderDock()}});
+$('#pane').addEventListener('change',e=>{const t=e.target;
+  if(t.dataset.dim!==undefined){const o=getSel();if(o&&T.sel.type==='room'){const v=parseFloat(t.value);if(!isNaN(v))resizeRoom(o,+t.dataset.dim,v)}renderDock();return}if(t.dataset.p&&['grade','dbl','type','kind'].includes(t.dataset.p)){renderDock()}if(t.dataset.ach){renderDock()}});
 $('#pane').addEventListener('click',e=>{
   const b=e.target.closest('button');if(!b)return;
   if(b.dataset.chk!==undefined){const c=T.checks[+b.dataset.chk];if(c.at){const w=w2s(c.at[0],c.at[1]);if(T.view==='2d'&&(w[0]<0||w[0]>V.w||w[1]<0||w[1]>V.h)){V.tx+=V.w/2-w[0];V.ty+=V.h/2-w[1]}}
@@ -1199,7 +1221,7 @@ async function init(){
   try{const qp=new URLSearchParams(location.search).get('project');if(qp){const o=await (await fetch(qp,{cache:'no-store'})).json();if(o&&o.rooms){layoutFor(o);applyProj(o);nextId=Math.max(o.nextId||1,nextId);changed();fitView();setCur(null);updTitle('เปิดจาก '+qp)}}}catch(e){toast('เปิดไฟล์โครงการจากลิงก์ไม่ได้')}
   if(!had&&!S.rooms.length){/* start empty with the underlay; demo is in the menu */}
 }
-window.__app={useLayout,getLayouts,normLayout,loadProjObj,saveDraft,openDraft,getDrafts,draftsDialog,quickSave,S,T,V,U,V3,findBg,boxBg,hideBg,finishFlow,tapTool,orthoPt,vtxPt,editVertexAt,MOD,rebuildUnderlay,sumHTML,propsHTML,commit,changed,runChecks,loadDemo,setView,fitView,doorGeom,machinePoly,dxfStr,csvStr,zipBlob,projectJSON,setSel,render};
+window.__app={useLayout,getLayouts,normLayout,loadProjObj,saveDraft,openDraft,getDrafts,draftsDialog,quickSave,S,T,V,U,V3,findBg,boxBg,hideBg,finishFlow,tapTool,orthoPt,vtxPt,editVertexAt,MOD,resizeRoom,roomSize,cancelDraw,delSel,doUndo,rebuildUnderlay,sumHTML,propsHTML,commit,changed,runChecks,loadDemo,setView,fitView,doorGeom,machinePoly,dxfStr,csvStr,zipBlob,projectJSON,setSel,render};
 init();
 </script>
 </body>
