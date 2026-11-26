@@ -1,0 +1,11 @@
+# company drawings and big intermediates stay out of git
+layouts/*.layout.json
+source/
+dist/
+data/
+plan.json
+*.dwg
+*.dxf
+__pycache__/
+*.pyc
+.DS_Store
