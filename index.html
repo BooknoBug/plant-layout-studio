@@ -166,7 +166,7 @@ dialog::backdrop{background:rgba(0,0,0,.4)}
    room types (default grade / pressure), flow types, cleanliness grades, ACH and room-condition defaults,
    and which background layers count as walls. Values are planning defaults, not regulatory limits. */
 'use strict';
-const APP_VERSION='1.7.0';
+const APP_VERSION='1.8.0';
 const LIB=[
  {k:'press',n:'เครื่องตอกเม็ด',w:1.5,d:1.3,h:2.2,c:0.8,col:'#3b5bdb'},
  {k:'blender',n:'เครื่องผสมแห้ง',w:2.0,d:1.6,h:2.5,c:0.8,col:'#3b5bdb'},
@@ -374,44 +374,74 @@ const w2s=(x,y)=>[x*V.s+V.tx,-y*V.s+V.ty];
 const s2w=(x,y)=>[(x-V.tx)/V.s,-(y-V.ty)/V.s];
 
 /* ====================== snapping ====================== */
-function snapPt(x,y,rad){
-  if(!T.snap)return{x:r2(x),y:r2(y),k:null};
-  let best=null,bd=rad;
-  const cx=Math.floor(x),cy=Math.floor(y),R=Math.ceil(rad)+0;
-  for(let i=-R;i<=R;i++)for(let j=-R;j<=R;j++){const a=snapIdx.get((cx+i)+','+(cy+j));if(a)for(const v of a){const d=Math.hypot(v[0]-x,v[1]-y);if(d<bd){bd=d;best=v}}}
-  for(const r of S.rooms)for(const v of r.pts){const d=Math.hypot(v[0]-x,v[1]-y);if(d<bd){bd=d;best=v}}
-  if(best)return{x:best[0],y:best[1],k:'pt'};
-  return{x:r2(x),y:r2(y),k:null}}
+/* Snapping, in order:
+   1. a corner (room corners win over background points: they count as 60% of their distance)
+   2. otherwise line up x and/or y with a room corner anywhere on the sheet, or a background point nearby
+      (red dashed guide) — so two rooms drawn separately end up with edges exactly in line
+   Holding Shift (or Ctrl) = no snapping at all, the point goes where you click.
+   opt.skipRoom: a room whose corners are ignored (the one being moved) · opt.skipPt: one corner array (the one being dragged) */
+const MOD={free:false};
 const snapRad=()=>Math.max(0.15,14/V.s);
+function bgNear(x,y,R){const out=[],cx=Math.floor(x),cy=Math.floor(y),n=Math.ceil(R);
+  for(let i=-n;i<=n;i++)for(let j=-n;j<=n;j++){const a=snapIdx.get((cx+i)+','+(cy+j));if(a)for(const v of a)if(Math.abs(v[0]-x)<=R&&Math.abs(v[1]-y)<=R)out.push(v)}
+  return out}
+function roomCorners(opt){const out=[];for(const r of S.rooms){if(opt&&opt.skipRoom===r)continue;for(const v of r.pts)if(!opt||v!==opt.skipPt)out.push(v)}
+  if(T.tool==='poly')for(let i=0;i<T.poly.length-(opt&&opt.polyLast?1:0);i++)out.push(T.poly[i]);
+  return out}
+function snapPt(x,y,rad,opt){
+  opt=opt||{};const free=opt.mod?opt.mod.free:MOD.free;
+  if(!T.snap||free)return{x:r2(x),y:r2(y),k:null};
+  const rc=roomCorners(opt);
+  let best=null,bd=rad;
+  for(const v of bgNear(x,y,rad)){const d=Math.hypot(v[0]-x,v[1]-y);if(d<bd){bd=d;best=v}}
+  for(const v of rc){const d=Math.hypot(v[0]-x,v[1]-y)*0.6;if(d<bd){bd=d;best=v}}
+  if(best)return{x:best[0],y:best[1],k:'pt'};
+  if(opt.noAlign)return{x:r2(x),y:r2(y),k:null};
+  /* line up: room corners from anywhere, background points within a few snap radii */
+  let ax=null,bx=rad,ay=null,by=rad;
+  for(const v of rc.concat(bgNear(x,y,rad*6))){const ex=Math.abs(v[0]-x),ey=Math.abs(v[1]-y);
+    if(ex<bx||ex===bx&&ax&&ey<Math.abs(ax[1]-y)){bx=ex;ax=v}if(ey<by||ey===by&&ay&&ex<Math.abs(ay[0]-x)){by=ey;ay=v}}
+  if(ax||ay){const refs=[ax,ay].filter(Boolean);return{x:ax?ax[0]:r2(x),y:ay?ay[1]:r2(y),k:'ax',ref:refs[0],refs,alx:!!ax,aly:!!ay}}
+  return{x:r2(x),y:r2(y),k:null}}
 /* ortho drawing for polygon rooms: a segment that is nearly horizontal/vertical locks straight,
-   then snaps only to points on that line or lined up with it (so a nearby column can't pull it crooked).
-   Shift = always lock · Ctrl = free angle. */
-const MOD={shift:false,free:false};
+   then snaps only to points on that line or lined up with it (so a nearby column can't pull it crooked). */
 const ORTHO_TOL=Math.tan(8*Math.PI/180);
-function nearPts(x,y,R){const out=[],cx=Math.floor(x),cy=Math.floor(y),n=Math.ceil(R);
-  for(let i=-n;i<=n;i++)for(let j=-n;j<=n;j++){const a=snapIdx.get((cx+i)+','+(cy+j));if(a)out.push(...a)}
-  for(const r of S.rooms)out.push(...r.pts);
-  return out.filter(v=>Math.abs(v[0]-x)<=R&&Math.abs(v[1]-y)<=R)}
 function orthoPt(prev,x,y,rad,mod){
-  mod=mod||MOD;if(!prev||mod.free)return snapPt(x,y,rad);
+  mod=mod||MOD;if(mod.free)return{x:r2(x),y:r2(y),k:null};
+  if(!prev)return snapPt(x,y,rad,{mod});
   const dx=x-prev[0],dy=y-prev[1],hz=Math.abs(dx)>=Math.abs(dy),big=Math.max(Math.abs(dx),Math.abs(dy)),small=Math.min(Math.abs(dx),Math.abs(dy));
-  if(!mod.shift&&(big<1e-9||small>big*ORTHO_TOL))return snapPt(x,y,rad);
+  if(big<1e-9||small>big*ORTHO_TOL)return snapPt(x,y,rad,{mod,polyLast:true});
   let px=hz?x:prev[0],py=hz?prev[1]:y;
   if(T.snap){let on=null,bo=rad,al=null,ba=rad,bOff=1e9;
-    /* corners already placed in this room line up from any distance (so the L closes square) */
-    for(const v of nearPts(px,py,rad*4).concat(T.poly.slice(0,-1).map(q=>Object.assign(q.slice(),{own:1})))){const along=hz?Math.abs(v[0]-px):Math.abs(v[1]-py),off=hz?Math.abs(v[1]-py):Math.abs(v[0]-px);
+    /* corners of rooms (and of this room) line up from any distance, background points only nearby */
+    const own=T.poly.slice(0,-1);
+    for(const v of bgNear(px,py,rad*4).concat(roomCorners({polyLast:true}))){const along=hz?Math.abs(v[0]-px):Math.abs(v[1]-py),off=hz?Math.abs(v[1]-py):Math.abs(v[0]-px);
       if(along>=rad)continue;
       if(off<1e-3){if(along<bo){bo=along;on=v}}
-      else{const o=v.own?-1:off;if(o<bOff||o===bOff&&along<ba){bOff=o;ba=along;al=v}}}
+      else{const o=own.includes(v)?-1:off;if(o<bOff||o===bOff&&along<ba){bOff=o;ba=along;al=v}}}
     if(on)return{x:on[0],y:on[1],k:'pt',ortho:true};
-    if(al)return hz?{x:al[0],y:py,k:'ax',ref:al,ortho:true}:{x:px,y:al[1],k:'ax',ref:al,ortho:true}}
+    if(al)return hz?{x:al[0],y:py,k:'ax',ref:al,refs:[al],ortho:true}:{x:px,y:al[1],k:'ax',ref:al,refs:[al],ortho:true}}
   return{x:hz?r2(px):px,y:hz?py:r2(py),k:null,ortho:true}}
 const polyPt=(x,y)=>orthoPt(T.poly[T.poly.length-1],x,y,snapRad());
-/* dragging a room corner: snap to a point, else line up x / y with the two neighbouring corners */
-function vtxPt(r,i,x,y,mod){mod=mod||MOD;const rad=snapRad(),s=snapPt(x,y,rad);if(s.k||mod.free)return s;
-  const n=r.pts.length,nb=[r.pts[(i+n-1)%n],r.pts[(i+1)%n]];let px=s.x,py=s.y,bx=rad,by=rad,hit=false;
-  for(const v of nb){if(Math.abs(v[0]-x)<bx){bx=Math.abs(v[0]-x);px=v[0];hit=true}if(Math.abs(v[1]-y)<by){by=Math.abs(v[1]-y);py=v[1];hit=true}}
-  return{x:px,y:py,k:null,ortho:hit}}
+/* dragging a room corner: snap / line up (ignoring the corner itself), neighbouring corners first */
+function vtxPt(r,i,x,y,mod){mod=mod||MOD;const rad=snapRad();if(mod.free)return{x:r2(x),y:r2(y),k:null};
+  const s=snapPt(x,y,rad,{mod,skipPt:r.pts[i],noAlign:true});if(s.k)return s;
+  const n=r.pts.length,nb=[r.pts[(i+n-1)%n],r.pts[(i+1)%n]];let px=null,py=null,bx=rad,by=rad;
+  for(const v of nb){if(Math.abs(v[0]-x)<bx){bx=Math.abs(v[0]-x);px=v}if(Math.abs(v[1]-y)<by){by=Math.abs(v[1]-y);py=v}}
+  const a=snapPt(x,y,rad,{mod,skipPt:r.pts[i]});
+  const X=px?px[0]:a.alx?a.x:r2(x),Y=py?py[1]:a.aly?a.y:r2(y);
+  const refs=[px||(a.alx&&a.refs[0]),py||(a.aly&&a.refs[a.refs.length-1])].filter(Boolean);
+  return{x:X,y:Y,k:refs.length?'ax':null,ref:refs[0],refs,ortho:refs.length>0}}
+/* moving a whole room: whichever of its corners comes near another corner snaps onto it;
+   otherwise its edges line up with other rooms' corners */
+function moveSnap(r,pts,dx,dy,mod){mod=mod||MOD;if(!T.snap||mod.free)return[dx,dy,null];const rad=snapRad();
+  let best=null,bd=1e9;
+  for(const p of pts){const x=p[0]+dx,y=p[1]+dy,s=snapPt(x,y,rad,{mod,skipRoom:r,noAlign:true});if(s.k){const d=Math.hypot(s.x-x,s.y-y);if(d<bd){bd=d;best=[s.x-p[0],s.y-p[1],s]}}}
+  if(best)return best;
+  let ox=null,bx=rad,oy=null,by=rad,rx=null,ry=null;
+  for(const p of pts){const x=p[0]+dx,y=p[1]+dy,s=snapPt(x,y,rad,{mod,skipRoom:r});if(s.k!=='ax')continue;
+    if(s.alx&&Math.abs(s.x-x)<bx){bx=Math.abs(s.x-x);ox=s.x-p[0];rx=s}if(s.aly&&Math.abs(s.y-y)<by){by=Math.abs(s.y-y);oy=s.y-p[1];ry=s}}
+  return[ox!=null?ox:r2(dx),oy!=null?oy:r2(dy),null]}
 /* add a corner on a room edge (double-click edge) or remove one (double-click corner, min 3) */
 function editVertexAt(wx,wy,sp){
   const rooms=T.sel&&T.sel.type==='room'?[getSel(),...S.rooms]:S.rooms;
@@ -579,7 +609,8 @@ function draw2D(){
     T.poly.forEach(v=>{const p=w2s(v[0],v[1]);ctx.beginPath();ctx.arc(p[0],p[1],4,0,7);ctx.fill()});
     if(T.hover){const l=T.poly[T.poly.length-1],a=w2s(l[0],l[1]),b=w2s(T.hover.x,T.hover.y),L=Math.hypot(T.hover.x-l[0],T.hover.y-l[1]);
       if(L>0.05)drawLabel(ctx,`${fmt(L)} ม.${T.hover.ortho?' ⟂':''}`,(a[0]+b[0])/2,(a[1]+b[1])/2-12,12,acc,true)}}
-  if(T.hover&&T.hover.k==='ax'&&T.hover.ref){const a=w2s(...T.hover.ref),b=w2s(T.hover.x,T.hover.y);ctx.save();ctx.strokeStyle=css('--err');ctx.lineWidth=1;ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();ctx.setLineDash([]);
+  if(T.hover&&T.hover.k==='ax'&&T.hover.ref){const b=w2s(T.hover.x,T.hover.y);ctx.save();ctx.strokeStyle=css('--err');ctx.lineWidth=1;ctx.setLineDash([4,4]);ctx.beginPath();
+    for(const rf of(T.hover.refs||[T.hover.ref])){const a=w2s(...rf);ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1])}ctx.stroke();ctx.setLineDash([]);
     ctx.beginPath();ctx.arc(b[0],b[1],4,0,7);ctx.stroke();ctx.restore();ctx.strokeStyle=acc;ctx.fillStyle=acc;ctx.lineWidth=2}
   if(T.tool==='room'&&T.pend&&T.hover){const a=w2s(T.pend[0],T.pend[1]),b=w2s(T.hover.x,T.hover.y);ctx.setLineDash([6,4]);ctx.strokeRect(Math.min(a[0],b[0]),Math.min(a[1],b[1]),Math.abs(a[0]-b[0]),Math.abs(a[1]-b[1]));ctx.setLineDash([]);
     const w=Math.abs(T.hover.x-T.pend[0]),h=Math.abs(T.hover.y-T.pend[1]);drawLabel(ctx,`${fmt(w,1)} × ${fmt(h,1)} ม.`,(a[0]+b[0])/2,Math.min(a[1],b[1])-10,12,acc,true)}
@@ -696,7 +727,7 @@ c2.addEventListener('pointermove',e=>{
   switch(drag.t){
     case'pan':case'taproom':case'tap':if(drag.moved||drag.t==='pan'&&drag.moved===true){V.tx=drag.tx+(sp[0]-drag.sx);V.ty=drag.ty+(sp[1]-drag.sy);if(T.tool!=='select')hoverUpdate(sp);render()}break;
     case'move':{if(!drag.moved)break;if(!drag.committed){commit();drag.committed=true}drag.o.x=r2(Math.round((w[0]+drag.ox)/0.05)*0.05);drag.o.y=r2(Math.round((w[1]+drag.oy)/0.05)*0.05);if(drag.type==='door'){const nw=nearWall(w[0],w[1],0.6);if(nw){drag.o.x=r2(nw.x);drag.o.y=r2(nw.y);drag.o.ang=nw.ang}}changed(true,true);break}
-    case'moveroom':{if(!drag.moved)break;if(!drag.committed){commit();drag.committed=true}const dx=w[0]-drag.lx,dy=w[1]-drag.ly;const sn=snapPt(drag.pts[0][0]+dx,drag.pts[0][1]+dy,snapRad());const ddx=sn.k?sn.x-drag.pts[0][0]:dx,ddy=sn.k?sn.y-drag.pts[0][1]:dy;drag.r.pts=drag.pts.map(p=>[r2(p[0]+ddx),r2(p[1]+ddy)]);changed(true,true);break}
+    case'moveroom':{if(!drag.moved)break;if(!drag.committed){commit();drag.committed=true}const[ddx,ddy]=moveSnap(drag.r,drag.pts,w[0]-drag.lx,w[1]-drag.ly);drag.r.pts=drag.pts.map(p=>[r2(p[0]+ddx),r2(p[1]+ddy)]);changed(true,true);break}
     case'vtx':{const s=vtxPt(drag.r,drag.i,w[0],w[1]);drag.r.pts[drag.i]=[s.x,s.y];T.hover=s;changed(true,true);break}
     case'rect':{const s=snapPt(w[0],w[1],snapRad());T.hover=s;T.pend=drag.p0;render();break}
     case'bgbox':{if(!drag.moved)break;T.bgBox=[drag.p0,w];render();break}
@@ -727,7 +758,7 @@ c2.addEventListener('contextmenu',e=>e.preventDefault());
 c2.addEventListener('wheel',e=>{e.preventDefault();const sp=pt(e),w=s2w(sp[0],sp[1]),k=clamp(V.s*Math.exp(-e.deltaY*0.0015),0.5,400);V.s=k;V.tx=sp[0]-w[0]*k;V.ty=sp[1]+w[1]*k;render()},{passive:false});
 c2.addEventListener('dblclick',e=>{if(T.tool==='poly')finishPoly();if(T.tool==='flow')finishFlow();
   if(T.tool==='select'){const sp=pt(e),w=s2w(sp[0],sp[1]);editVertexAt(w[0],w[1],sp)}});
-const setMod=e=>{const s=!!e.shiftKey,f=!!(e.ctrlKey||e.metaKey);if(s!==MOD.shift||f!==MOD.free){MOD.shift=s;MOD.free=f;return true}return false};
+const setMod=e=>{const f=!!(e.shiftKey||e.ctrlKey||e.metaKey);if(f!==MOD.free){MOD.free=f;return true}return false};
 c2.addEventListener('pointermove',setMod,true);c2.addEventListener('pointerdown',setMod,true);
 
 function tapTool(w,sp){
@@ -771,7 +802,7 @@ c3.addEventListener('pointerup',up);c3.addEventListener('pointercancel',up);c3.a
 c3.addEventListener('wheel',e=>{e.preventDefault();V3.s=clamp(V3.s*Math.exp(-e.deltaY*0.0015),1,200);render()},{passive:false})}
 
 let lastSp=null;c2.addEventListener('pointermove',e=>{if(e.pointerType==='mouse')lastSp=pt(e)});
-const modKey=e=>{if(setMod(e)&&T.tool==='poly'&&lastSp&&!drag)hoverUpdate(lastSp)};
+const modKey=e=>{if(setMod(e)&&lastSp&&!drag)hoverUpdate(lastSp)};
 window.addEventListener('keyup',modKey);
 window.addEventListener('keydown',e=>{
   modKey(e);
@@ -816,7 +847,7 @@ function renderCtx(){
   else if(T.tool==='door')h=DOORS.map(l=>`<button class="chip" data-door="${l.k}" aria-pressed="${T.door.k===l.k}">${esc(l.n)}</button>`).join('')+'<span class="hint">แตะที่ผนัง บานจะวางตามแนวผนังให้</span>';
   else if(T.tool==='room'||T.tool==='poly'){
     const rt=RTYPES.map(t=>`<button class="chip" data-rtype="${t.k}" aria-pressed="${T.rtype===t.k}">${esc(t.n)} · ${t.pa}</button>`).join('');
-    h=(T.tool==='room'?'<span class="hint">ลากเป็นสี่เหลี่ยม หรือแตะ 2 มุม · คลิกขวา/Esc = ยกเลิก · ประเภท:</span>':`<button class="chip go" data-act="polydone">เสร็จ (${T.poly.length} จุด)</button><button class="chip" data-act="polyundo">ลบจุดล่าสุด</button><span class="hint">แตะทีละมุม เส้นเกือบตรงจะล็อกฉากให้ (⟂) · Shift ล็อกเสมอ · Ctrl เส้นเอียงอิสระ · คลิกขวา/Esc = ยกเลิก · ประเภท:</span>`)+rt}
+    h=(T.tool==='room'?'<span class="hint">ลากเป็นสี่เหลี่ยม หรือแตะ 2 มุม · ขอบจะเรียงแนวกับมุมห้องอื่นให้ (เส้นประแดง) · Shift ค้าง = ไม่ดูด · คลิกขวา/Esc = ยกเลิก · ประเภท:</span>':`<button class="chip go" data-act="polydone">เสร็จ (${T.poly.length} จุด)</button><button class="chip" data-act="polyundo">ลบจุดล่าสุด</button><span class="hint">แตะทีละมุม เส้นเกือบตรงจะล็อกฉากให้ (⟂) · Shift ค้าง = ไม่ดูด วางอิสระ · คลิกขวา/Esc = ยกเลิก · ประเภท:</span>`)+rt}
   else if(T.tool==='flow')h=FLOWS.map(f=>`<button class="chip" data-flow="${f.k}" aria-pressed="${T.flow.k===f.k}"><span class="sw" style="background:${f.col}"></span>${esc(f.n)}</button>`).join('')+`<button class="chip go" data-act="flowdone">เสร็จ (${T.fpts.length} จุด)</button><button class="chip" data-act="flowundo">ลบจุดล่าสุด</button><span class="hint">แตะทีละจุดตามทางเดิน แตะจุดสุดท้ายซ้ำเพื่อจบ</span>`;
   else if(T.tool==='dim')h='<span class="hint">แตะ 2 จุดเพื่อเขียนเส้นบอกขนาด (มม.) ค้างไว้บนแบบ</span>';
   else if(T.tool==='bg')h=`<button class="chip${T.bgLock?'':' go'}" data-act="bglock">${T.bgLock?'🔒 ล็อกอยู่ · แตะเพื่อปลดล็อก':'🔓 ปลดล็อกแล้ว · แตะเพื่อล็อก'}</button>`
@@ -1221,7 +1252,7 @@ async function init(){
   try{const qp=new URLSearchParams(location.search).get('project');if(qp){const o=await (await fetch(qp,{cache:'no-store'})).json();if(o&&o.rooms){layoutFor(o);applyProj(o);nextId=Math.max(o.nextId||1,nextId);changed();fitView();setCur(null);updTitle('เปิดจาก '+qp)}}}catch(e){toast('เปิดไฟล์โครงการจากลิงก์ไม่ได้')}
   if(!had&&!S.rooms.length){/* start empty with the underlay; demo is in the menu */}
 }
-window.__app={useLayout,getLayouts,normLayout,loadProjObj,saveDraft,openDraft,getDrafts,draftsDialog,quickSave,S,T,V,U,V3,findBg,boxBg,hideBg,finishFlow,tapTool,orthoPt,vtxPt,editVertexAt,MOD,resizeRoom,roomSize,cancelDraw,delSel,doUndo,rebuildUnderlay,sumHTML,propsHTML,commit,changed,runChecks,loadDemo,setView,fitView,doorGeom,machinePoly,dxfStr,csvStr,zipBlob,projectJSON,setSel,render};
+window.__app={useLayout,getLayouts,normLayout,loadProjObj,saveDraft,openDraft,getDrafts,draftsDialog,quickSave,S,T,V,U,V3,findBg,boxBg,hideBg,finishFlow,tapTool,orthoPt,vtxPt,moveSnap,snapPt,editVertexAt,MOD,resizeRoom,roomSize,cancelDraw,delSel,doUndo,rebuildUnderlay,sumHTML,propsHTML,commit,changed,runChecks,loadDemo,setView,fitView,doorGeom,machinePoly,dxfStr,csvStr,zipBlob,projectJSON,setSel,render};
 init();
 </script>
 </body>
