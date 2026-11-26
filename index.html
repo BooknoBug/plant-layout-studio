@@ -166,7 +166,7 @@ dialog::backdrop{background:rgba(0,0,0,.4)}
    room types (default grade / pressure), flow types, cleanliness grades, ACH and room-condition defaults,
    and which background layers count as walls. Values are planning defaults, not regulatory limits. */
 'use strict';
-const APP_VERSION='1.5.0';
+const APP_VERSION='1.6.0';
 const LIB=[
  {k:'press',n:'เครื่องตอกเม็ด',w:1.5,d:1.3,h:2.2,c:0.8,col:'#3b5bdb'},
  {k:'blender',n:'เครื่องผสมแห้ง',w:2.0,d:1.6,h:2.5,c:0.8,col:'#3b5bdb'},
@@ -383,6 +383,49 @@ function snapPt(x,y,rad){
   if(best)return{x:best[0],y:best[1],k:'pt'};
   return{x:r2(x),y:r2(y),k:null}}
 const snapRad=()=>Math.max(0.15,14/V.s);
+/* ortho drawing for polygon rooms: a segment that is nearly horizontal/vertical locks straight,
+   then snaps only to points on that line or lined up with it (so a nearby column can't pull it crooked).
+   Shift = always lock · Ctrl = free angle. */
+const MOD={shift:false,free:false};
+const ORTHO_TOL=Math.tan(8*Math.PI/180);
+function nearPts(x,y,R){const out=[],cx=Math.floor(x),cy=Math.floor(y),n=Math.ceil(R);
+  for(let i=-n;i<=n;i++)for(let j=-n;j<=n;j++){const a=snapIdx.get((cx+i)+','+(cy+j));if(a)out.push(...a)}
+  for(const r of S.rooms)out.push(...r.pts);
+  return out.filter(v=>Math.abs(v[0]-x)<=R&&Math.abs(v[1]-y)<=R)}
+function orthoPt(prev,x,y,rad,mod){
+  mod=mod||MOD;if(!prev||mod.free)return snapPt(x,y,rad);
+  const dx=x-prev[0],dy=y-prev[1],hz=Math.abs(dx)>=Math.abs(dy),big=Math.max(Math.abs(dx),Math.abs(dy)),small=Math.min(Math.abs(dx),Math.abs(dy));
+  if(!mod.shift&&(big<1e-9||small>big*ORTHO_TOL))return snapPt(x,y,rad);
+  let px=hz?x:prev[0],py=hz?prev[1]:y;
+  if(T.snap){let on=null,bo=rad,al=null,ba=rad,bOff=1e9;
+    /* corners already placed in this room line up from any distance (so the L closes square) */
+    for(const v of nearPts(px,py,rad*4).concat(T.poly.slice(0,-1).map(q=>Object.assign(q.slice(),{own:1})))){const along=hz?Math.abs(v[0]-px):Math.abs(v[1]-py),off=hz?Math.abs(v[1]-py):Math.abs(v[0]-px);
+      if(along>=rad)continue;
+      if(off<1e-3){if(along<bo){bo=along;on=v}}
+      else{const o=v.own?-1:off;if(o<bOff||o===bOff&&along<ba){bOff=o;ba=along;al=v}}}
+    if(on)return{x:on[0],y:on[1],k:'pt',ortho:true};
+    if(al)return hz?{x:al[0],y:py,k:'ax',ref:al,ortho:true}:{x:px,y:al[1],k:'ax',ref:al,ortho:true}}
+  return{x:hz?r2(px):px,y:hz?py:r2(py),k:null,ortho:true}}
+const polyPt=(x,y)=>orthoPt(T.poly[T.poly.length-1],x,y,snapRad());
+/* dragging a room corner: snap to a point, else line up x / y with the two neighbouring corners */
+function vtxPt(r,i,x,y,mod){mod=mod||MOD;const rad=snapRad(),s=snapPt(x,y,rad);if(s.k||mod.free)return s;
+  const n=r.pts.length,nb=[r.pts[(i+n-1)%n],r.pts[(i+1)%n]];let px=s.x,py=s.y,bx=rad,by=rad,hit=false;
+  for(const v of nb){if(Math.abs(v[0]-x)<bx){bx=Math.abs(v[0]-x);px=v[0];hit=true}if(Math.abs(v[1]-y)<by){by=Math.abs(v[1]-y);py=v[1];hit=true}}
+  return{x:px,y:py,k:null,ortho:hit}}
+/* add a corner on a room edge (double-click edge) or remove one (double-click corner, min 3) */
+function editVertexAt(wx,wy,sp){
+  const rooms=T.sel&&T.sel.type==='room'?[getSel(),...S.rooms]:S.rooms;
+  for(const r of rooms){if(!r)continue;
+    for(let i=0;i<r.pts.length;i++){const p=w2s(...r.pts[i]);if(Math.hypot(p[0]-sp[0],p[1]-sp[1])<10){
+      if(r.pts.length<=3){toast('ห้องต้องมีอย่างน้อย 3 มุม');return true}
+      commit();r.pts.splice(i,1);setSel('room',r.id);changed();toast('ลบมุมแล้ว');return true}}}
+  const tol=Math.max(0.15,12/V.s);
+  for(const r of rooms){if(!r)continue;
+    for(let i=0;i<r.pts.length;i++){const a=r.pts[i],b=r.pts[(i+1)%r.pts.length],d=segDist(wx,wy,a[0],a[1],b[0],b[1]);
+      if(d[0]<tol&&d[3]>0.02&&d[3]<0.98){commit();
+        const q=Math.abs(a[1]-b[1])<1e-6?[r2(d[1]),a[1]]:Math.abs(a[0]-b[0])<1e-6?[a[0],r2(d[2])]:[r2(d[1]),r2(d[2])];
+        r.pts.splice(i+1,0,q);setSel('room',r.id);changed();toast('เพิ่มมุมแล้ว ลากมุมใหม่ไปตำแหน่งที่ต้องการ');return true}}}
+  return false}
 function nearWall(x,y,tol){
   let best=null,bd=tol;
   const test=(ax,ay,bx,by)=>{const r=segDist(x,y,ax,ay,bx,by);if(r[0]<bd){bd=r[0];best={x:r[1],y:r[2],ang:Math.atan2(by-ay,bx-ax)}}};
@@ -533,7 +576,11 @@ function draw2D(){
   // drawing previews
   const acc=css('--accent');ctx.strokeStyle=acc;ctx.fillStyle=acc;ctx.lineWidth=2;
   if(T.tool==='poly'&&T.poly.length){ctx.beginPath();T.poly.forEach((v,i)=>{const p=w2s(v[0],v[1]);i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1])});if(T.hover){const p=w2s(T.hover.x,T.hover.y);ctx.lineTo(p[0],p[1])}ctx.stroke();
-    T.poly.forEach(v=>{const p=w2s(v[0],v[1]);ctx.beginPath();ctx.arc(p[0],p[1],4,0,7);ctx.fill()})}
+    T.poly.forEach(v=>{const p=w2s(v[0],v[1]);ctx.beginPath();ctx.arc(p[0],p[1],4,0,7);ctx.fill()});
+    if(T.hover){const l=T.poly[T.poly.length-1],a=w2s(l[0],l[1]),b=w2s(T.hover.x,T.hover.y),L=Math.hypot(T.hover.x-l[0],T.hover.y-l[1]);
+      if(L>0.05)drawLabel(ctx,`${fmt(L)} ม.${T.hover.ortho?' ⟂':''}`,(a[0]+b[0])/2,(a[1]+b[1])/2-12,12,acc,true)}}
+  if(T.hover&&T.hover.k==='ax'&&T.hover.ref){const a=w2s(...T.hover.ref),b=w2s(T.hover.x,T.hover.y);ctx.save();ctx.strokeStyle=css('--err');ctx.lineWidth=1;ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();ctx.setLineDash([]);
+    ctx.beginPath();ctx.arc(b[0],b[1],4,0,7);ctx.stroke();ctx.restore();ctx.strokeStyle=acc;ctx.fillStyle=acc;ctx.lineWidth=2}
   if(T.tool==='room'&&T.pend&&T.hover){const a=w2s(T.pend[0],T.pend[1]),b=w2s(T.hover.x,T.hover.y);ctx.setLineDash([6,4]);ctx.strokeRect(Math.min(a[0],b[0]),Math.min(a[1],b[1]),Math.abs(a[0]-b[0]),Math.abs(a[1]-b[1]));ctx.setLineDash([]);
     const w=Math.abs(T.hover.x-T.pend[0]),h=Math.abs(T.hover.y-T.pend[1]);drawLabel(ctx,`${fmt(w,1)} × ${fmt(h,1)} ม.`,(a[0]+b[0])/2,Math.min(a[1],b[1])-10,12,acc,true)}
   if(T.tool==='measure'&&T.meas.length){const pts=T.meas.slice();if(pts.length===1&&T.hover)pts.push([T.hover.x,T.hover.y]);
@@ -607,7 +654,8 @@ function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('on');
 
 function hoverUpdate(sp){
   const w=s2w(sp[0],sp[1]);let h=null;
-  if(['room','poly','measure'].includes(T.tool)||T.tool==='select'&&drag&&drag.t==='vtx'){h=snapPt(w[0],w[1],snapRad())}
+  if(T.tool==='poly'){h=polyPt(w[0],w[1])}
+  else if(['room','measure'].includes(T.tool)||T.tool==='select'&&drag&&drag.t==='vtx'){h=snapPt(w[0],w[1],snapRad())}
   else if(T.tool==='machine'){const g=0.05;h={x:Math.round(w[0]/g)*g,y:Math.round(w[1]/g)*g}}
   else if(T.tool==='door'){const nw=nearWall(w[0],w[1],Math.max(0.6,18/V.s));h=nw?{x:nw.x,y:nw.y,ang:nw.ang}:{x:w[0],y:w[1],ang:null}}
   else if(T.tool==='flow'){const g=0.1;h={x:r2(Math.round(w[0]/g)*g),y:r2(Math.round(w[1]/g)*g)}}
@@ -647,7 +695,7 @@ c2.addEventListener('pointermove',e=>{
     case'pan':case'taproom':case'tap':if(drag.moved||drag.t==='pan'&&drag.moved===true){V.tx=drag.tx+(sp[0]-drag.sx);V.ty=drag.ty+(sp[1]-drag.sy);if(T.tool!=='select')hoverUpdate(sp);render()}break;
     case'move':{if(!drag.moved)break;if(!drag.committed){commit();drag.committed=true}drag.o.x=r2(Math.round((w[0]+drag.ox)/0.05)*0.05);drag.o.y=r2(Math.round((w[1]+drag.oy)/0.05)*0.05);if(drag.type==='door'){const nw=nearWall(w[0],w[1],0.6);if(nw){drag.o.x=r2(nw.x);drag.o.y=r2(nw.y);drag.o.ang=nw.ang}}changed(true,true);break}
     case'moveroom':{if(!drag.moved)break;if(!drag.committed){commit();drag.committed=true}const dx=w[0]-drag.lx,dy=w[1]-drag.ly;const sn=snapPt(drag.pts[0][0]+dx,drag.pts[0][1]+dy,snapRad());const ddx=sn.k?sn.x-drag.pts[0][0]:dx,ddy=sn.k?sn.y-drag.pts[0][1]:dy;drag.r.pts=drag.pts.map(p=>[r2(p[0]+ddx),r2(p[1]+ddy)]);changed(true,true);break}
-    case'vtx':{const s=snapPt(w[0],w[1],snapRad());drag.r.pts[drag.i]=[s.x,s.y];T.hover=s;changed(true,true);break}
+    case'vtx':{const s=vtxPt(drag.r,drag.i,w[0],w[1]);drag.r.pts[drag.i]=[s.x,s.y];T.hover=s;changed(true,true);break}
     case'rect':{const s=snapPt(w[0],w[1],snapRad());T.hover=s;T.pend=drag.p0;render();break}
     case'bgbox':{if(!drag.moved)break;T.bgBox=[drag.p0,w];render();break}
     case'movepts':{if(!drag.moved)break;if(!drag.committed){commit();drag.committed=true}const dx=w[0]-drag.lx,dy=w[1]-drag.ly,mv=p=>[r2(p[0]+dx),r2(p[1]+dy)];
@@ -674,11 +722,14 @@ c2.addEventListener('pointerup',endPointer);
 c2.addEventListener('pointercancel',e=>{P.delete(e.pointerId);pinch=null;drag=null});
 c2.addEventListener('contextmenu',e=>e.preventDefault());
 c2.addEventListener('wheel',e=>{e.preventDefault();const sp=pt(e),w=s2w(sp[0],sp[1]),k=clamp(V.s*Math.exp(-e.deltaY*0.0015),0.5,400);V.s=k;V.tx=sp[0]-w[0]*k;V.ty=sp[1]+w[1]*k;render()},{passive:false});
-c2.addEventListener('dblclick',e=>{if(T.tool==='poly')finishPoly();if(T.tool==='flow')finishFlow()});
+c2.addEventListener('dblclick',e=>{if(T.tool==='poly')finishPoly();if(T.tool==='flow')finishFlow();
+  if(T.tool==='select'){const sp=pt(e),w=s2w(sp[0],sp[1]);editVertexAt(w[0],w[1],sp)}});
+const setMod=e=>{const s=!!e.shiftKey,f=!!(e.ctrlKey||e.metaKey);if(s!==MOD.shift||f!==MOD.free){MOD.shift=s;MOD.free=f;return true}return false};
+c2.addEventListener('pointermove',setMod,true);c2.addEventListener('pointerdown',setMod,true);
 
 function tapTool(w,sp){
   const tool=T.tool;
-  if(tool==='poly'){const s=snapPt(w[0],w[1],snapRad());
+  if(tool==='poly'){const s=polyPt(w[0],w[1]);
     if(T.poly.length>=3){const f=w2s(...T.poly[0]);if(Math.hypot(f[0]-sp[0],f[1]-sp[1])<16){finishPoly();return}}
     T.poly.push([s.x,s.y]);renderCtx();render();return}
   if(tool==='machine'){const g=0.05,x=r2(Math.round(w[0]/g)*g),y=r2(Math.round(w[1]/g)*g);commit();
@@ -716,7 +767,11 @@ const up=e=>{P3.delete(e.pointerId);if(P3.size<2)pz=null;if(!P3.size)d3=null};
 c3.addEventListener('pointerup',up);c3.addEventListener('pointercancel',up);c3.addEventListener('contextmenu',e=>e.preventDefault());
 c3.addEventListener('wheel',e=>{e.preventDefault();V3.s=clamp(V3.s*Math.exp(-e.deltaY*0.0015),1,200);render()},{passive:false})}
 
+let lastSp=null;c2.addEventListener('pointermove',e=>{if(e.pointerType==='mouse')lastSp=pt(e)});
+const modKey=e=>{if(setMod(e)&&T.tool==='poly'&&lastSp&&!drag)hoverUpdate(lastSp)};
+window.addEventListener('keyup',modKey);
 window.addEventListener('keydown',e=>{
+  modKey(e);
   if(e.target.closest&&e.target.closest('input,select,textarea'))return;
   if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?doRedo():doUndo();return}
   if(e.key==='Escape'){T.poly=[];T.pend=null;T.meas=[];T.fpts=[];T.dpts=[];T.bgBox=null;setSel(null);renderCtx();render()}
@@ -743,7 +798,7 @@ function renderCtx(){
   else if(T.tool==='door')h=DOORS.map(l=>`<button class="chip" data-door="${l.k}" aria-pressed="${T.door.k===l.k}">${esc(l.n)}</button>`).join('')+'<span class="hint">แตะที่ผนัง บานจะวางตามแนวผนังให้</span>';
   else if(T.tool==='room'||T.tool==='poly'){
     const rt=RTYPES.map(t=>`<button class="chip" data-rtype="${t.k}" aria-pressed="${T.rtype===t.k}">${esc(t.n)} · ${t.pa}</button>`).join('');
-    h=(T.tool==='room'?'<span class="hint">ลากเป็นสี่เหลี่ยม หรือแตะ 2 มุม · ประเภท:</span>':`<button class="chip go" data-act="polydone">เสร็จ (${T.poly.length} จุด)</button><button class="chip" data-act="polyundo">ลบจุดล่าสุด</button><span class="hint">ประเภท:</span>`)+rt}
+    h=(T.tool==='room'?'<span class="hint">ลากเป็นสี่เหลี่ยม หรือแตะ 2 มุม · ประเภท:</span>':`<button class="chip go" data-act="polydone">เสร็จ (${T.poly.length} จุด)</button><button class="chip" data-act="polyundo">ลบจุดล่าสุด</button><span class="hint">แตะทีละมุม เส้นเกือบตรงจะล็อกฉากให้ (⟂) · Shift ล็อกเสมอ · Ctrl เส้นเอียงอิสระ · ประเภท:</span>`)+rt}
   else if(T.tool==='flow')h=FLOWS.map(f=>`<button class="chip" data-flow="${f.k}" aria-pressed="${T.flow.k===f.k}"><span class="sw" style="background:${f.col}"></span>${esc(f.n)}</button>`).join('')+`<button class="chip go" data-act="flowdone">เสร็จ (${T.fpts.length} จุด)</button><button class="chip" data-act="flowundo">ลบจุดล่าสุด</button><span class="hint">แตะทีละจุดตามทางเดิน แตะจุดสุดท้ายซ้ำเพื่อจบ</span>`;
   else if(T.tool==='dim')h='<span class="hint">แตะ 2 จุดเพื่อเขียนเส้นบอกขนาด (มม.) ค้างไว้บนแบบ</span>';
   else if(T.tool==='bg')h=`<button class="chip${T.bgLock?'':' go'}" data-act="bglock">${T.bgLock?'🔒 ล็อกอยู่ · แตะเพื่อปลดล็อก':'🔓 ปลดล็อกแล้ว · แตะเพื่อล็อก'}</button>`
@@ -751,7 +806,7 @@ function renderCtx(){
     +(T.bgMode==='box'?`<button class="chip" data-act="bgtile" aria-pressed="${T.bgTile}">รวมเส้นตาราง</button>`:'')
     +`<span class="hint">ลบไปแล้ว ${S.bgHidden.length} เส้น</span>`+(S.bgHidden.length?'<button class="chip" data-act="bgrestore">คืนเส้นทั้งหมด</button>':'');
   else if(T.tool==='measure')h='<span class="hint">แตะ 2 จุดเพื่อวัดระยะ</span>';
-  else h='<span class="hint">แตะวัตถุเพื่อเลือก ลากเครื่องจักรหรือประตูเพื่อย้าย ลากพื้นที่ว่างเพื่อเลื่อนแบบ</span>';
+  else h='<span class="hint">แตะวัตถุเพื่อเลือก ลากเครื่องจักรหรือประตูเพื่อย้าย ลากพื้นที่ว่างเพื่อเลื่อนแบบ · ดับเบิลคลิกขอบห้อง = เพิ่มมุม · ดับเบิลคลิกมุม = ลบมุม</span>';
   c.innerHTML=h;
 }
 function renderLegend(){
@@ -1144,7 +1199,7 @@ async function init(){
   try{const qp=new URLSearchParams(location.search).get('project');if(qp){const o=await (await fetch(qp,{cache:'no-store'})).json();if(o&&o.rooms){layoutFor(o);applyProj(o);nextId=Math.max(o.nextId||1,nextId);changed();fitView();setCur(null);updTitle('เปิดจาก '+qp)}}}catch(e){toast('เปิดไฟล์โครงการจากลิงก์ไม่ได้')}
   if(!had&&!S.rooms.length){/* start empty with the underlay; demo is in the menu */}
 }
-window.__app={useLayout,getLayouts,normLayout,loadProjObj,saveDraft,openDraft,getDrafts,draftsDialog,quickSave,S,T,V,U,V3,findBg,boxBg,hideBg,finishFlow,tapTool,rebuildUnderlay,sumHTML,propsHTML,commit,changed,runChecks,loadDemo,setView,fitView,doorGeom,machinePoly,dxfStr,csvStr,zipBlob,projectJSON,setSel,render};
+window.__app={useLayout,getLayouts,normLayout,loadProjObj,saveDraft,openDraft,getDrafts,draftsDialog,quickSave,S,T,V,U,V3,findBg,boxBg,hideBg,finishFlow,tapTool,orthoPt,vtxPt,editVertexAt,MOD,rebuildUnderlay,sumHTML,propsHTML,commit,changed,runChecks,loadDemo,setView,fitView,doorGeom,machinePoly,dxfStr,csvStr,zipBlob,projectJSON,setSel,render};
 init();
 </script>
 </body>

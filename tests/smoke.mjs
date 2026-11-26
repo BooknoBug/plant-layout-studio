@@ -28,5 +28,16 @@ t('new layout with other origin keeps design at same DWG position',()=>{saved=JS
   A.useLayout(fx('test-hall-r2.layout.json'));const r1=S.rooms[0].pts[0];assert(Math.abs(r1[0]-(r0[0]+5))<1e-6&&Math.abs(r1[1]-(r0[1]+10))<1e-6);
   assert.equal(A.U.cnt.WALL,1,'hidden wall line still hidden after the shift')});
 t('opening a project file restores its own layout',()=>{A.loadProjObj(saved,'x');assert.equal(A.U.id,'test-hall');assert.equal(S.rooms.length,7)});
+t('poly: nearly-straight segment locks ortho, ignores off-line point',()=>{A.T.snap=true;A.V.s=20;
+  const p=A.orthoPt([10,15],18,15.3,0.7,{shift:false,free:false});assert(p.ortho&&p.y===15,'locked horizontal');
+  const f=A.orthoPt([10,15],18,15.3,0.7,{shift:false,free:true});assert(!f.ortho,'Ctrl = free');
+  const d=A.orthoPt([10,15],14,18,0.7,{shift:false,free:false});assert(!d.ortho,'real diagonal stays free');
+  const s=A.orthoPt([10,15],12,18,0.7,{shift:true,free:false});assert(s.ortho&&s.x===10,'Shift forces vertical')});
+t('double-click room edge adds a corner, corner removes it',()=>{const r={id:9100,name:'L',type:'other',grade:'D',pa:15,h:3,pts:[[100,100],[110,100],[110,106],[100,106]]};S.rooms.push(r);A.V.s=20;A.V.tx=0;A.V.ty=0;
+  const sp=w=>[w[0]*A.V.s+A.V.tx,-w[1]*A.V.s+A.V.ty];
+  assert(A.editVertexAt(105,100,sp([105,100])));assert.equal(r.pts.length,5);assert.deepEqual(r.pts[1],[105,100]);
+  assert(A.editVertexAt(105,100,sp([105,100])));assert.equal(r.pts.length,4);
+  const v=A.vtxPt({pts:[[0,0],[5,0.02],[5,5]]},1,5.1,0.1,{free:false});assert(v.x===5&&v.y===0,'corner lines up with neighbours');
+  S.rooms=S.rooms.filter(q=>q!==r)});
 t('DXF has entities',()=>{const d=A.dxfStr();assert(d.includes('PH-ROOM')&&d.trim().endsWith('EOF'))});
 console.log(`${ok} checks passed`);
