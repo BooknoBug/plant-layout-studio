@@ -47,6 +47,7 @@ header h1 small{display:block;font-weight:400;font-size:11px;color:var(--muted)}
 .ptab:hover{color:var(--ink)}
 .ptab.add{border-style:dashed;color:var(--accent)}
 .ptab.ed{padding:6px 10px}
+.ptab.del:hover{color:var(--err);border-color:var(--err)}
 .ptab .pc{font-weight:400;color:var(--accent);font-size:12px}
 .collab{border:1px solid var(--ok);color:var(--ok);background:var(--panel);border-radius:999px;min-height:32px;padding:3px 11px;font-size:12px;white-space:nowrap}
 .collab.busy{border-color:var(--info);color:var(--info)}

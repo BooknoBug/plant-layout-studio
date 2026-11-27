@@ -136,7 +136,8 @@ function coPlantsSnap(snap){
   const list=[];for(const d of snap.docs){const v=d.data()||{};
     const col=typeof v.col==='string'&&/^(items|plants\/[A-Za-z0-9_-]{1,40}\/items)$/.test(v.col)?v.col:null;if(!col)continue;
     list.push({id:d.id,name:String(v.name||'Plant').slice(0,60),order:+v.order||0,col})}
-  if(!list.some(p=>p.col===MAIN_COL))list.push({id:'main',name:'Plant 1',order:0,col:MAIN_COL,implicit:true});
+  /* an artifact without a registry yet: its work is in `items` */
+  if(!list.length)list.push({id:'main',name:'Plant 1',order:0,col:MAIN_COL,implicit:true});
   list.sort((a,b)=>a.order-b.order||a.name.localeCompare(b.name));
   CO.plants=list;
   if(!CO.pid){let want=null;try{want=localStorage.getItem('pls-plant')}catch(e){}
@@ -166,7 +167,23 @@ function coTabs(){const el=$('#plants');if(!el||!CO.on)return;el.hidden=false;
   const cnt={};for(const p of coOthers(true)){const pl=p.presence&&p.presence.plant;if(typeof pl==='string')cnt[pl]=(cnt[pl]||0)+1}
   el.innerHTML=CO.plants.map(p=>`<button class="ptab" role="tab" data-plant="${esc(p.id)}" aria-selected="${p.id===CO.pid}">${esc(p.name)}${cnt[p.id]?` <span class="pc" title="คนอื่นที่เปิด plant นี้อยู่">👤${cnt[p.id]}</span>`:''}</button>`).join('')+
     `<button class="ptab add" data-plant-add title="สร้าง plant ใหม่ (ทุกคนในงานร่วมเห็น)">+ Plant ใหม่</button>`+
-    `<button class="ptab ed" data-plant-ren title="เปลี่ยนชื่อ plant นี้">✎</button>`}
+    `<button class="ptab ed" data-plant-ren title="เปลี่ยนชื่อ plant นี้">✎</button>`+
+    (CO.canEdit&&CO.plants.length>1?`<button class="ptab ed del" data-plant-del title="ลบ plant นี้ (แท็บที่เปิดอยู่)">🗑</button>`:'')}
+/* delete the open plant: its registry entry and every document in its collection. Editors/owner only; not undoable. */
+async function deletePlant(){const P=plantOf(CO.pid);if(!P)return;
+  if(!CO.canEdit){toast('ลบ plant ได้เฉพาะเจ้าของหรือ Editor');return}
+  if(CO.plants.length<2){toast('ต้องเหลืออย่างน้อย 1 plant');return}
+  const who=new Set(coOthers(true).filter(p=>p.presence&&p.presence.plant===P.id).map(p=>p.by||p.peer)).size;
+  const a=await askDlg('ลบ plant “'+P.name+'”?',`แท็บนี้มี ห้อง ${S.rooms.length} · เครื่องจักร ${S.machines.length} · ประตู ${S.doors.length} จะถูกลบสำหรับทุกคน <b>และย้อนกลับไม่ได้</b> (Ctrl+Z ใช้ไม่ได้)${who?` · ตอนนี้มีคนอื่นเปิดแท็บนี้อยู่ ${who} คน`:''}<br><span class="muted">ถ้าอยากเก็บไว้ ให้กดยกเลิก แล้วบันทึกเป็นไฟล์ .json ก่อน (เมนู ⋯ → Draft และไฟล์โครงการ)</span>`,['ลบ plant นี้','ยกเลิก']);
+  if(a!==0)return;
+  const rest=CO.plants.filter(p=>p.id!==P.id),col=P.col;
+  try{toast('กำลังลบ “'+P.name+'”…');
+    await CO.db.collection('plants').doc(P.implicit?'main':P.id).delete();
+    CO.plants=rest;switchPlant(rest[0].id);
+    const snap=await CO.db.collection(col).get();
+    for(const d of snap.docs){try{await CO.db.collection(col).doc(d.id).delete()}catch(e){}}
+    toast('ลบ “'+P.name+'” แล้ว')}
+  catch(e){toast('ลบไม่สำเร็จ ('+(e&&e.code||'error')+')')}}
 function plantDialog(mode){const d=$('#dlg'),P=plantOf(CO.pid);
   if(CO.ro){toast('คุณมีสิทธิ์ดูอย่างเดียว สร้าง/เปลี่ยนชื่อ plant ไม่ได้');return}
   const isNew=mode==='new';
@@ -260,6 +277,7 @@ async function collabStart(){
   try{CO.assets=await claude.use('assets')}catch(e){CO.assets=null}
   try{CO.room=await claude.use('room')}catch(e){CO.room=null}
   if(CO.user){try{CO.isOwner=!!(await CO.user.isOwner())}catch(e){}
+    try{CO.canEdit=!!(await CO.user.canEdit())}catch(e){}
     try{const w=await CO.user.can('data.write');CO.canWrite=w;if(w===false)CO.ro=true}catch(e){}}
   coHooks();
   const el=$('#collab');if(el){el.onclick=coDialog}
@@ -267,7 +285,8 @@ async function collabStart(){
   if(tabs)tabs.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;
     if(b.dataset.plant){if(b.dataset.plant!==CO.pid){switchPlant(b.dataset.plant)}return}
     if(b.dataset.plantAdd!==undefined){plantDialog('new');return}
-    if(b.dataset.plantRen!==undefined){plantDialog('rename')}});
+    if(b.dataset.plantRen!==undefined){plantDialog('rename');return}
+    if(b.dataset.plantDel!==undefined)deletePlant()});
   coStatus();
   /* plant registry; until it answers (or if it cannot), show the first plant */
   let regOk=false;
