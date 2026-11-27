@@ -31,7 +31,11 @@ python3 tools/extract_sheet.py plan.json --box X0 Y0 X1 Y1 --out source/x_raw.js
 python3 tools/layouts/pd2_floor2.py         # source/pd2_floor2_raw.json -> layouts/PD2-floor2.layout.json
 ```
 
-## สถานะล่าสุด (v1.5.0, 26 พ.ย. 2026)
+## v1.11.0 (27 พ.ย. 2026)
+- แก้ไขพร้อมกันหลายคนผ่านหน้า Claude artifact (`src/collab.js`, ดู DEVELOPER.md) · Ctrl+Z ใช้ได้กับแป้นภาษาไทย
+- URL ของ artifact ไม่เก็บใน repo (repo เป็นสาธารณะ) ให้ถามผู้ใช้ หรือดูจาก `/artifacts`
+
+## สถานะเดิม (v1.5.0, 26 พ.ย. 2026)
 - layout ที่ใช้อยู่: `PD2-floor2.layout.json` (id `pd2-floor2-r1`) อาคาร PD2 ชั้น 2 ครึ่งซ้าย จาก AR-TO_R1 แผ่น “ผังพื้น 2”
   origin DWG (6140, 1354) · ตาราง 1 ม. ตรวจกับแบบพิมพ์ของผู้ใช้แล้ว · ผู้ใช้มีไฟล์นี้และไฟล์ดิบ `pd2_floor2_raw.json`
 - เสร็จแล้ว: ห้อง/เครื่อง/ประตู/เส้นทางไหล/บอกขนาด, ลบเส้นพื้นหลัง (ล็อก), กฎ GMP, สรุปพื้นที่/ACH/ΔP, 3D,

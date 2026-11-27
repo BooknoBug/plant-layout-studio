@@ -19,6 +19,7 @@ if a.embed:
     out = out.replace('<script src="config.js"></script>', '<script>window.__UNDERLAY=' + lay + ';</script>\n<script src="config.js"></script>')
 out = out.replace('<script src="config.js"></script>', '<script>\n' + js('config.js') + '</script>')
 out = out.replace('<script src="app.js"></script>', '<script>\n' + js('app.js') + '</script>')
+out = out.replace('<script src="collab.js"></script>', '<script>\n' + js('collab.js') + '</script>')
 assert 'src="' not in out.split('<body>')[1], 'unreplaced script tag'
 o = pathlib.Path(a.out); o.parent.mkdir(parents=True, exist_ok=True); o.write_text(out, encoding='utf-8')
 ver = re.search(r"APP_VERSION='([^']+)'", out).group(1)

@@ -39,6 +39,9 @@ header h1 small{display:block;font-weight:400;font-size:11px;color:var(--muted)}
 .ibtn{border:1px solid var(--line);background:var(--panel2);border-radius:8px;min-width:36px;min-height:34px;padding:4px 10px}
 .ibtn:disabled{opacity:.4;cursor:default}
 .ibtn:hover:not(:disabled){border-color:var(--accent)}
+.collab{border:1px solid var(--ok);color:var(--ok);background:var(--panel);border-radius:999px;min-height:32px;padding:3px 11px;font-size:12px;white-space:nowrap}
+.collab.busy{border-color:var(--info);color:var(--info)}
+.collab.bad{border-color:var(--warn);color:var(--warn);background:var(--warn-bg)}
 #tools{display:flex;gap:6px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:thin}
 #tools button{flex:none;border:1px solid var(--line);background:var(--panel2);border-radius:8px;padding:6px 10px;min-height:36px;white-space:nowrap}
 #tools button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}

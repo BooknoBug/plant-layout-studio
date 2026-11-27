@@ -36,11 +36,16 @@ function applyProj(o){
   const before=JSON.stringify([S.bgHidden,S.bgErase]);S.bgHidden=Array.isArray(o.bgHidden)?o.bgHidden:[];S.bgErase=Array.isArray(o.bgErase)?o.bgErase:[];
   const c=o.cfg||{};Object.assign(S.cfg,c);S.cfg.ach=Object.assign({...ACH_DEF},c.ach||{});S.cfg.spec=Object.assign({...SPEC_DEF},c.spec||{});
   if(U.loaded&&before!==JSON.stringify([S.bgHidden,S.bgErase]))rebuildUnderlay()}
-function commit(){undo.push(snapState());if(undo.length>80)undo.shift();redo.length=0;updHist()}
+/* HIST: hooks filled in by collab.js when the page runs as a shared Claude artifact (several people editing).
+   There undo works per person on what that person changed, instead of restoring whole snapshots. */
+const HIST={};
+function commit(){if(HIST.commit)HIST.commit();undo.push(snapState());if(undo.length>80)undo.shift();redo.length=0;updHist()}
 function restore(js){const o=JSON.parse(js);applyProj(o);nextId=o.nextId||nextId;T.sel=null;changed(true)}
-function doUndo(){if(!undo.length)return;redo.push(snapState());restore(undo.pop());updHist()}
-function doRedo(){if(!redo.length)return;undo.push(snapState());restore(redo.pop());updHist()}
-function updHist(){$('#undo').disabled=!undo.length;$('#redo').disabled=!redo.length}
+function doUndo(){if(HIST.undo){HIST.undo();return}if(!undo.length)return;redo.push(snapState());restore(undo.pop());updHist()}
+function doRedo(){if(HIST.redo){HIST.redo();return}if(!redo.length)return;undo.push(snapState());restore(redo.pop());updHist()}
+/* throw away the step just started (cancel a drag) */
+function revertLast(){if(HIST.revert){HIST.revert();return}restore(undo.pop());updHist()}
+function updHist(){if(HIST.sync)HIST.sync();$('#undo').disabled=!undo.length;$('#redo').disabled=!redo.length}
 let saveT=0;
 function autosave(){clearTimeout(saveT);saveT=setTimeout(()=>{try{localStorage.setItem('pls-project-v1',snapState())}catch(e){}},400)}
 function loadAuto(){try{const j=localStorage.getItem('pls-project-v1');if(j){const o=JSON.parse(j);if(o&&o.rooms){applyProj(o);nextId=o.nextId||1;return true}}}catch(e){}return false}
@@ -443,6 +448,7 @@ function draw2D(){
   if(T.tool==='flow'&&T.fpts.length){const pts=T.fpts.slice();if(T.hover)pts.push([T.hover.x,T.hover.y]);if(pts.length>1)drawFlow(ctx,pts,T.flow,false);T.fpts.forEach(v=>{const p=w2s(...v);ctx.beginPath();ctx.arc(p[0],p[1],4,0,7);ctx.fillStyle=T.flow.col;ctx.fill()})}
   if(T.tool==='dim'&&T.dpts.length&&T.hover)drawDim(ctx,T.dpts[0],[T.hover.x,T.hover.y],acc,false);
   if(T.hover&&T.hover.k==='pt'){const p=w2s(T.hover.x,T.hover.y);ctx.strokeStyle=css('--err');ctx.lineWidth=1.5;ctx.strokeRect(p[0]-5,p[1]-5,10,10)}
+  if(HIST.draw)HIST.draw(ctx);
   if(!U.loaded){drawLabel(ctx,'ยังไม่ได้เปิดแบบพื้นหลัง',V.w/2,V.h/2-12,16,css('--ink'),true);drawLabel(ctx,'แท็บ “แบบพื้นหลัง” หรือเมนู ⋯ → เปิดแบบพื้นหลัง (.layout.json)',V.w/2,V.h/2+14,13,css('--muted'),false)}
   drawScale();
 }
@@ -618,7 +624,7 @@ function newRoom(pts){commit();const rt=RT(T.rtype);const n=S.rooms.filter(q=>(q
 function finishRect(a,b){const x0=Math.min(a[0],b[0]),x1=Math.max(a[0],b[0]),y0=Math.min(a[1],b[1]),y1=Math.max(a[1],b[1]);if(x1-x0<0.5||y1-y0<0.5){toast('ห้องเล็กเกินไป');return}newRoom([[x0,y0],[x1,y0],[x1,y1],[x0,y1]])}
 function finishPoly(){if(T.poly.length<3){toast('ต้องมีอย่างน้อย 3 จุด');return}newRoom(T.poly.map(p=>p.slice()));T.poly=[];renderCtx()}
 
-function changed(light,noDock){autosave();runChecks();renderLegend();if(!light){renderDock()}else if(!noDock){updChecksTab()}render()}
+function changed(light,noDock){if(HIST.changed)HIST.changed();autosave();runChecks();renderLegend();if(!light){renderDock()}else if(!noDock){updChecksTab()}render()}
 function updChecksTab(){if(T.tab==='checks')renderDock()}
 
 /* 3D pointers */
@@ -637,13 +643,19 @@ const modKey=e=>{if(setMod(e)&&lastSp&&!drag)hoverUpdate(lastSp)};
 window.addEventListener('keyup',modKey);
 window.addEventListener('keydown',e=>{
   modKey(e);
-  if(e.target.closest&&e.target.closest('input,select,textarea'))return;
-  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();e.shiftKey?doRedo():doUndo();return}
+  /* use e.code (physical key) so shortcuts work with the Thai keyboard layout too (Z gives 'ผ' there) */
+  const ck=e.ctrlKey||e.metaKey,isZ=e.code==='KeyZ'||e.key.toLowerCase()==='z',isY=e.code==='KeyY'||e.key.toLowerCase()==='y';
+  const inField=e.target.closest&&e.target.closest('input,select,textarea');
+  /* in the side-panel fields the edit is already in app history (commit on first keystroke): undo that, not the browser's text undo */
+  if(ck&&(isZ||isY)&&inField&&!e.target.closest('#pane'))return;
+  if(ck&&isZ){e.preventDefault();if(inField)inField.blur();e.shiftKey?doRedo():doUndo();return}
+  if(ck&&isY){e.preventDefault();if(inField)inField.blur();doRedo();return}
+  if(inField)return;
   if(e.key==='Escape'){if(!cancelDraw()){setSel(null);renderCtx();render()}}
   if(e.key==='Enter'&&T.tool==='flow')finishFlow();
   if(e.key==='Enter'&&T.tool==='poly')finishPoly();
   if((e.key==='Delete'||e.key==='Backspace')&&T.sel)delSel();
-  if(e.key.toLowerCase()==='r'&&T.sel&&T.sel.type==='machine')rotSel();
+  if((e.code==='KeyR'||e.key.toLowerCase()==='r')&&!ck&&T.sel&&T.sel.type==='machine')rotSel();
 });
 
 /* ====================== editing actions ====================== */
@@ -658,7 +670,7 @@ function resizeRoom(r,ax,val){val=r2(val);const cs=r.pts.map(p=>p[ax]),lo=Math.m
 /* cancel what is being drawn or dragged (right-click, or Esc) */
 function cancelDraw(){let did=false;const d=drag;
   if(d&&['rect','vtx','move','moveroom','movepts','bgbox'].includes(d.t)){drag=null;did=true;
-    if(d.t==='vtx'||d.committed){const sel=T.sel;restore(undo.pop());updHist();if(sel&&getSelBy(sel))setSel(sel.type,sel.id)}}
+    if(d.t==='vtx'||d.committed){const sel=T.sel;revertLast();if(sel&&getSelBy(sel))setSel(sel.type,sel.id)}}
   if(T.poly.length||T.pend||T.meas.length||T.fpts.length||T.dpts.length||T.bgBox)did=true;
   T.poly=[];T.pend=null;T.meas=[];T.fpts=[];T.dpts=[];T.bgBox=null;
   if(did){renderCtx();render();toast('ยกเลิกแล้ว')}return did}
@@ -808,15 +820,15 @@ function listHTML(){
 /* dock events */
 $('#pane').addEventListener('input',e=>{
   const t=e.target;
-  if(t.dataset.cfg){S.cfg[t.dataset.cfg]=+t.value||0;changed(true,true);return}
+  if(t.dataset.cfg){if(!t._c){commit();t._c=true}S.cfg[t.dataset.cfg]=+t.value||0;changed(true,true);return}
   if(t.dataset.p){const o=getSel();if(!o)return;if(!t._c){commit();t._c=true}
     let v=t.type==='checkbox'?t.checked:t.value;if(t.type==='number'){v=parseFloat(v);if(isNaN(v))return}
     if(t.dataset.p==='dbl'){o.dbl=v==='1'}
     else if(t.dataset.p==='type'){o.type=v;const rt=RT(v);o.grade=rt.grade;o.pa=rt.pa}
     else o[t.dataset.p]=v;
     changed(true,true);return}
-  if(t.dataset.ach){S.cfg.ach[t.dataset.ach]=+t.value||0;autosave();return}
-  if(t.dataset.spec){S.cfg.spec[t.dataset.spec]=t.value;autosave();return}
+  if(t.dataset.ach){if(!t._c){commit();t._c=true}S.cfg.ach[t.dataset.ach]=+t.value||0;autosave();return}
+  if(t.dataset.spec){if(!t._c){commit();t._c=true}S.cfg.spec[t.dataset.spec]=t.value;autosave();return}
   if(t.dataset.alpha!==undefined){U.alpha=+t.value;render();return}
   if(t.dataset.lay){U.vis[t.dataset.lay]=t.checked;render();return}
   if(t.dataset.txt!==undefined){U.showText=t.checked;render()}
@@ -952,7 +964,7 @@ function useLayout(raw,opt={}){
   let L;try{L=normLayout(raw)}catch(e){toast('ไฟล์นี้ไม่ใช่แบบพื้นหลัง');return false}
   const has=S.rooms.length||S.machines.length||S.doors.length||S.flows.length||S.dims.length;
   if(U.loaded&&opt.shift!==false&&has){const dx=U.origin[0]-L.origin[0],dy=U.origin[1]-L.origin[1];if(Math.abs(dx)>1e-9||Math.abs(dy)>1e-9)shiftProject(dx,dy)}
-  prepUnderlay(L);if(opt.persist!==false)storeLayout(L);
+  prepUnderlay(L);if(opt.persist!==false)storeLayout(L);if(HIST.layout)HIST.layout(L);
   undo.length=0;redo.length=0;updHist();T.sel=null;fitView();changed();renderDock();
   if(!opt.quiet)toast('ใช้แบบพื้นหลัง “'+L.name+'”'+(has&&opt.shift!==false?' · ห้องและเครื่องที่วางไว้คงตำแหน่งเดิมตามพิกัด DWG':''));return true}
 async function readJsonFile(f){return JSON.parse(await f.text())}
@@ -1000,7 +1012,7 @@ function draftsDialog(){
   <div class="row"><button class="btn" data-dr="close">ปิด</button></div>`;
   if(!d.open)d.showModal()}
 $('#qsave').onclick=quickSave;
-window.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();quickSave()}});
+window.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&(e.code==='KeyS'||e.key.toLowerCase()==='s')){e.preventDefault();quickSave()}});
 function openMenu(){
   const d=$('#dlg');
   d.innerHTML=`<h3 style="margin-top:0;font-size:16px">เมนู</h3>
@@ -1085,6 +1097,8 @@ async function init(){
   /* ?project=drafts/xxx.json opens a project file kept next to the page (e.g. in the same GitHub repo) */
   try{const qp=new URLSearchParams(location.search).get('project');if(qp){const o=await (await fetch(qp,{cache:'no-store'})).json();if(o&&o.rooms){layoutFor(o);applyProj(o);nextId=Math.max(o.nextId||1,nextId);changed();fitView();setCur(null);updTitle('เปิดจาก '+qp)}}}catch(e){toast('เปิดไฟล์โครงการจากลิงก์ไม่ได้')}
   if(!had&&!S.rooms.length){/* start empty with the underlay; demo is in the menu */}
+  /* shared editing (collab.js) — only does anything inside a Claude artifact */
+  setTimeout(()=>{if(typeof collabStart==='function')collabStart()},0);
 }
 window.__app={useLayout,getLayouts,normLayout,loadProjObj,saveDraft,openDraft,getDrafts,draftsDialog,quickSave,S,T,V,U,V3,findBg,boxBg,hideBg,finishFlow,tapTool,hitTest,doorHit,roomMembers,moveMembers,orthoPt,vtxPt,moveSnap,snapPt,eraseBg,gridNear,pieces,editVertexAt,MOD,resizeRoom,roomSize,cancelDraw,delSel,doUndo,rebuildUnderlay,sumHTML,propsHTML,commit,changed,runChecks,loadDemo,setView,fitView,doorGeom,machinePoly,dxfStr,csvStr,zipBlob,projectJSON,setSel,render};
 init();

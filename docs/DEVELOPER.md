@@ -60,6 +60,18 @@ cfg      {minAisle, minDP, wallH, colorBy, ach:{grade:n}, spec:{grade:text}}
 - รุ่นแก้ของแบบเดิม: เพิ่ม `LAYOUT_ID` (r2, r3 …) · ถ้า origin เปลี่ยน โปรแกรมเลื่อนงานที่วาดไว้ให้อยู่ตำแหน่ง DWG เดิมเอง (`shiftProject`)
 - อ่าน DWG JSON แบบ UTF-8 errors='replace' (ภาษาไทยถูก) · entity ใน model space = ตัวที่ไม่มี `ownerhandle`
 
+## แก้ไขพร้อมกัน (collab.js)
+- ทำงานเฉพาะเมื่อ `claude.use('db')` ได้ (หน้า Claude artifact) นอกนั้น `collabStart()` ออกทันที
+- publish: `python3 tools/build.py --out dist/plant-layout-studio.html` แล้ว publish ไฟล์นี้เป็น artifact เดิม (URL เดิม)
+  capabilities `{db:{}, user:{scopes:["profile"]}, room:{}, assets:{}, downloads:true}` · ห้ามใช้ `--embed` (แบบพื้นหลังอยู่ใน asset)
+- db collection `items`: `room-<id>`, `machine-<id>`, `door-<id>`, `flow-<id>`, `dim-<id>` = `{o:<object>}` · `cfg` · `bg` `{o:{h:bgHidden,e:bgErase}}`
+  · `layout` `{asset,id,name,origin}` (ไฟล์ .layout.json เป็น asset, โหลดจาก `/_blob/<asset>`)
+- จับการแก้โดย diff `S` กับ `CO.base` ทุกครั้งที่ `changed()` (hook `HIST` ใน app.js) → เขียนทีละ doc ครั้งละ 1 ต่อ doc
+  เพิ่มชนิดของใหม่ใน `LK` แล้วซิงก์ให้เอง · field ใหม่ใน cfg ก็ซิงก์เอง
+- undo ในโหมดนี้: ทุก `commit()` เปิดขั้น `{b,a}` เก็บเฉพาะ doc ที่คนนั้นแก้ (ไม่ใช่ snapshot ทั้งงาน)
+- id ใหม่เริ่มที่ `Date.now()*100` กันชนกันระหว่างเครื่อง
+- ทดสอบได้ด้วย `claude` ปลอม (iframe 2 อันแชร์ db ในหน้าเดียว) — ยังไม่มีใน smoke test
+
 ## ข้อจำกัดที่รู้
 - งานหนึ่งไฟล์ = แบบพื้นหลังหนึ่งชุด (หนึ่งชั้น) ยังไม่รองรับหลายชั้นในไฟล์เดียว
 - 3 มิติใช้ painter's algorithm อาจซ้อนผิดลำดับในบางมุม
