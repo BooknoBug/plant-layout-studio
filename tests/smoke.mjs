@@ -60,5 +60,9 @@ t('eraser cuts only the part inside the box, keeps the grid, saved in the file, 
   assert(pc.every(p=>p.every(v=>!(v[0]>10.001&&v[0]<11.999&&v[1]<1))),'nothing left inside the box');assert.equal(A.U.cnt['TILE-GRID'],nT,'grid untouched');
   const o=JSON.parse(A.projectJSON(false));assert.equal(o.v,4);assert.deepEqual(o.bgErase,[[10,0,12,1]]);
   A.doUndo();assert.equal(A.pieces('WALL',i).length,1);assert.equal(S.bgErase.length,0)});
+t('door is picked by its leaf / swing area, ahead of the room under it',()=>{const d={id:9400,name:'D',x:105,y:105,ang:0,w:0.9,dbl:false,side:1,hinge:1};
+  const r={id:9401,name:'R',type:'other',grade:'D',pa:15,h:3,pts:[[100,100],[110,100],[110,110],[100,110]]};S.doors.push(d);S.rooms.push(r);A.V.s=40;
+  assert(A.doorHit(d,104.8,105.5,0.1),'inside swing');assert(!A.doorHit(d,104.8,104.5,0.1),'other side of wall');assert(!A.doorHit(d,106,107,0.1),'far away');
+  const h=A.hitTest(104.8,105.5);assert(h&&h.type==='door'&&h.obj===d);S.doors=S.doors.filter(q=>q!==d);S.rooms=S.rooms.filter(q=>q!==r)});
 t('DXF has entities',()=>{const d=A.dxfStr();assert(d.includes('PH-ROOM')&&d.trim().endsWith('EOF'))});
 console.log(`${ok} checks passed`);

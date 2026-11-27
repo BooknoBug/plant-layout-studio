@@ -483,10 +483,18 @@ function draw3D(){
 /* ====================== interaction ====================== */
 const P=new Map();let drag=null,pinch=null,hoverRaf=0;
 const pt=e=>{const r=c2.getBoundingClientRect();return[e.clientX-r.left,e.clientY-r.top]};
+function doorHit(d,x,y,tol){const g=doorGeom(d),e=g.ends;
+  if(segDist(x,y,e[0][0],e[0][1],e[1][0],e[1][1])[0]<tol)return true;
+  for(const l of g.leaves){const h=l.hinge;if(segDist(x,y,h[0],h[1],l.open[0],l.open[1])[0]<tol)return true;
+    const vx=x-h[0],vy=y-h[1],r=Math.hypot(vx,vy);if(r>l.r+tol)continue;
+    const c=[l.closed[0]-h[0],l.closed[1]-h[1]],o=[l.open[0]-h[0],l.open[1]-h[1]],lc=Math.hypot(...c)||1,lo=Math.hypot(...o)||1;
+    if((vx*c[0]+vy*c[1])/lc>=-tol&&(vx*o[0]+vy*o[1])/lo>=-tol)return true}
+  return false}
 function hitTest(wx,wy){
   const tol=Math.max(0.2,10/V.s);
+  /* doors first: the whole door counts (wall opening, leaf lines and the swing area), not just its centre */
+  for(let i=S.doors.length-1;i>=0;i--){const d=S.doors[i];if(doorHit(d,wx,wy,tol))return{type:'door',obj:d}}
   for(let i=S.machines.length-1;i>=0;i--){const m=S.machines[i];if(pip(machinePoly(m,0.05),wx,wy))return{type:'machine',obj:m}}
-  for(let i=S.doors.length-1;i>=0;i--){const d=S.doors[i];if(Math.hypot(d.x-wx,d.y-wy)<Math.max(d.w/2,tol))return{type:'door',obj:d}}
   for(let i=S.dims.length-1;i>=0;i--){const d=S.dims[i];if(segDist(wx,wy,d.a[0],d.a[1],d.b[0],d.b[1])[0]<tol)return{type:'dim',obj:d}}
   for(let i=S.flows.length-1;i>=0;i--){const f=S.flows[i];for(let j=0;j+1<f.pts.length;j++)if(segDist(wx,wy,f.pts[j][0],f.pts[j][1],f.pts[j+1][0],f.pts[j+1][1])[0]<tol)return{type:'flow',obj:f}}
   let best=null,ba=1e12;for(const r of S.rooms)if(pip(r.pts,wx,wy)){const a=Math.abs(polyArea(r.pts));if(a<ba){ba=a;best=r}}
@@ -740,7 +748,7 @@ function propsHTML(){
     <label>แบบ<select data-p="dbl"><option value="0" ${o.dbl?'':'selected'}>บานเดี่ยว</option><option value="1" ${o.dbl?'selected':''}>บานคู่</option></select></label>
     <label class="lay w" style="flex-direction:row"><input type="checkbox" data-p="interlock" ${o.interlock?'checked':''}><span>Interlock (ห้ามเปิดพร้อมบานอื่นของ airlock)</span></label></div>
     <div class="row"><button class="btn" data-act="flip">พลิกทิศเปิด</button>${o.dbl?'':'<button class="btn" data-act="hinge">สลับบานพับ</button>'}<button class="btn" data-act="dup">คัดลอก</button><button class="btn dng" data-act="del">ลบ</button></div>
-    <p class="muted">ปกติให้บานเปิดเข้าด้านห้องที่ความดันสูงกว่า โปรแกรมจะเตือนถ้าตั้งสวนทาง</p>`;
+    <p class="muted">ปกติให้บานเปิดเข้าด้านห้องที่ความดันสูงกว่า โปรแกรมจะเตือนถ้าตั้งสวนทาง · ลบ: คลิกที่บานหรือวงสวิงของประตูแล้วกด Delete หรือปุ่ม ลบ (Ctrl+Z เอาคืน)</p>`;
 }
 function layoutsHTML(){
   const A=getLayouts(),ids=Object.keys(A).sort((a,b)=>A[b].ts-A[a].ts),m=U.meta||{};
@@ -1068,5 +1076,5 @@ async function init(){
   try{const qp=new URLSearchParams(location.search).get('project');if(qp){const o=await (await fetch(qp,{cache:'no-store'})).json();if(o&&o.rooms){layoutFor(o);applyProj(o);nextId=Math.max(o.nextId||1,nextId);changed();fitView();setCur(null);updTitle('เปิดจาก '+qp)}}}catch(e){toast('เปิดไฟล์โครงการจากลิงก์ไม่ได้')}
   if(!had&&!S.rooms.length){/* start empty with the underlay; demo is in the menu */}
 }
-window.__app={useLayout,getLayouts,normLayout,loadProjObj,saveDraft,openDraft,getDrafts,draftsDialog,quickSave,S,T,V,U,V3,findBg,boxBg,hideBg,finishFlow,tapTool,orthoPt,vtxPt,moveSnap,snapPt,eraseBg,gridNear,pieces,editVertexAt,MOD,resizeRoom,roomSize,cancelDraw,delSel,doUndo,rebuildUnderlay,sumHTML,propsHTML,commit,changed,runChecks,loadDemo,setView,fitView,doorGeom,machinePoly,dxfStr,csvStr,zipBlob,projectJSON,setSel,render};
+window.__app={useLayout,getLayouts,normLayout,loadProjObj,saveDraft,openDraft,getDrafts,draftsDialog,quickSave,S,T,V,U,V3,findBg,boxBg,hideBg,finishFlow,tapTool,hitTest,doorHit,orthoPt,vtxPt,moveSnap,snapPt,eraseBg,gridNear,pieces,editVertexAt,MOD,resizeRoom,roomSize,cancelDraw,delSel,doUndo,rebuildUnderlay,sumHTML,propsHTML,commit,changed,runChecks,loadDemo,setView,fitView,doorGeom,machinePoly,dxfStr,csvStr,zipBlob,projectJSON,setSel,render};
 init();
