@@ -7,7 +7,7 @@ const r2=v=>Math.round(v*100)/100;
 const fmt=(v,n=2)=>(+v).toFixed(n);
 
 /* ====================== state ====================== */
-const S={rooms:[],machines:[],doors:[],flows:[],dims:[],bgHidden:[],cfg:{minAisle:1.2,minDP:5,wallH:3.5,colorBy:'pa',ach:{...ACH_DEF},spec:{...SPEC_DEF}}};
+const S={rooms:[],machines:[],doors:[],flows:[],dims:[],bgHidden:[],bgErase:[],cfg:{minAisle:1.2,minDP:5,wallH:3.5,colorBy:'pa',ach:{...ACH_DEF},spec:{...SPEC_DEF}}};
 let nextId=1;
 const U={paths:{},texts:[],origin:[0,0],loaded:false,vis:{},alpha:1,showText:false,p2d:{},cnt:{},bb:{},keys:{},hidden:new Set(),
   id:null,name:'',meta:null,raw:null,wallL:WALL_LAYERS,snapL:SNAP_LAYERS,defVis:DEF_VIS};
@@ -18,22 +18,24 @@ const undo=[],redo=[];
 let snapIdx=new Map(),wallSegs=[];
 
 /* ====================== history & autosave ====================== */
-const snapState=()=>JSON.stringify({rooms:S.rooms,machines:S.machines,doors:S.doors,flows:S.flows,dims:S.dims,bgHidden:S.bgHidden,cfg:S.cfg,nextId});
+const snapState=()=>JSON.stringify({rooms:S.rooms,machines:S.machines,doors:S.doors,flows:S.flows,dims:S.dims,bgHidden:S.bgHidden,bgErase:S.bgErase,cfg:S.cfg,nextId});
 /* project file format. Bump PROJECT_FORMAT when the saved structure changes and add a step in migrateProject,
    so drafts and .json files from older versions still open. */
-const PROJECT_FORMAT=3;
+const PROJECT_FORMAT=4;
 function migrateProject(o){
   o=o||{};const v=+o.v||1;
   if(v<2){o.flows=o.flows||[];o.dims=o.dims||[];o.bgHidden=o.bgHidden||[]}
   /* v3 adds layoutRef {id,name,origin} and, in files, the whole layout (o.layout) — nothing to convert */
-  /* if(v<4){ ...next change... } */
+  /* v4 adds bgErase: rectangles [x0,y0,x1,y1] where background lines are cut away (eraser) */
+  if(v<4){o.bgErase=o.bgErase||[]}
+  /* if(v<5){ ...next change... } */
   return o}
 function applyProj(o){
   o=migrateProject(o);
   S.rooms=o.rooms||[];S.machines=o.machines||[];S.doors=o.doors||[];S.flows=o.flows||[];S.dims=o.dims||[];
-  const before=JSON.stringify(S.bgHidden);S.bgHidden=Array.isArray(o.bgHidden)?o.bgHidden:[];
+  const before=JSON.stringify([S.bgHidden,S.bgErase]);S.bgHidden=Array.isArray(o.bgHidden)?o.bgHidden:[];S.bgErase=Array.isArray(o.bgErase)?o.bgErase:[];
   const c=o.cfg||{};Object.assign(S.cfg,c);S.cfg.ach=Object.assign({...ACH_DEF},c.ach||{});S.cfg.spec=Object.assign({...SPEC_DEF},c.spec||{});
-  if(U.loaded&&before!==JSON.stringify(S.bgHidden))rebuildUnderlay()}
+  if(U.loaded&&before!==JSON.stringify([S.bgHidden,S.bgErase]))rebuildUnderlay()}
 function commit(){undo.push(snapState());if(undo.length>80)undo.shift();redo.length=0;updHist()}
 function restore(js){const o=JSON.parse(js);applyProj(o);nextId=o.nextId||nextId;T.sel=null;changed(true)}
 function doUndo(){if(!undo.length)return;redo.push(snapState());restore(undo.pop());updHist()}
@@ -89,37 +91,78 @@ function prepUnderlay(d){
     U.keys[k]=U.paths[k].map(p=>{const a=p[0],b=p[p.length-1];return k+'@'+[a[0],a[1],b[0],b[1]].map(v=>(+v).toFixed(2)).join(',')+','+p.length});
     U.vis[k]=U.defVis.includes(k)}
   if(!Object.values(U.vis).some(Boolean))for(const k in U.vis)U.vis[k]=true;
+  U.grid=inferGrid(d);
   rebuildUnderlay();
 }
 /* background lines are never part of the design: they can only be hidden (erased) in the "แก้พื้นหลัง" tool, and the list of hidden lines is saved with the project */
 function rebuildUnderlay(){
   /* older projects stored "layer#index"; convert them to geometry keys */
   S.bgHidden=[...new Set(S.bgHidden.map(x=>{const m=/^(.*)#(\d+)$/.exec(x);return m&&U.keys[m[1]]&&U.keys[m[1]][+m[2]]?U.keys[m[1]][+m[2]]:x}))];
-  const H=new Set(S.bgHidden);U.hidden=H;
+  const H=new Set(S.bgHidden);U.hidden=H;S.bgErase=S.bgErase||[];
+  U.clip={};const E=S.bgErase;
   for(const k of Object.keys(U.paths)){
-    const p=new Path2D();let n=0;
-    U.paths[k].forEach((path,i)=>{if(path.length<2||H.has(U.keys[k][i]))return;p.moveTo(path[0][0],path[0][1]);for(let j=1;j<path.length;j++)p.lineTo(path[j][0],path[j][1]);n++});
+    const p=new Path2D();let n=0;U.clip[k]=[];
+    U.paths[k].forEach((path,i)=>{if(path.length<2||H.has(U.keys[k][i]))return;
+      /* the 1 m tile grid is never erased; other lines lose the parts inside eraser rectangles */
+      const b=U.bb[k][i],hit=k==='TILE-GRID'?[]:E.filter(e=>b[0]<=e[2]&&b[2]>=e[0]&&b[1]<=e[3]&&b[3]>=e[1]);
+      const pcs=hit.length?clipPath(path,hit):[path];if(hit.length)U.clip[k][i]=pcs;
+      for(const q of pcs){if(q.length<2)continue;p.moveTo(q[0][0],q[0][1]);for(let j=1;j<q.length;j++)p.lineTo(q[j][0],q[j][1])}if(pcs.length)n++});
     U.p2d[k]=p;U.cnt[k]=n}
   buildSnap();
 }
+/* the visible pieces of background path i of layer k (after the eraser) */
+const pieces=(k,i)=>(U.clip&&U.clip[k]&&U.clip[k][i])||[U.paths[k][i]];
+/* segment a-b minus rectangle e: 0, 1 or 2 pieces (Liang-Barsky) */
+function cutSeg(a,b,e){const dx=b[0]-a[0],dy=b[1]-a[1];let t0=0,t1=1;
+  const P=[-dx,dx,-dy,dy],Q=[a[0]-e[0],e[2]-a[0],a[1]-e[1],e[3]-a[1]];
+  for(let i=0;i<4;i++){if(Math.abs(P[i])<1e-12){if(Q[i]<0)return[[a,b]];continue}const t=Q[i]/P[i];if(P[i]<0){if(t>t0)t0=t}else if(t<t1)t1=t}
+  if(t0>=t1)return[[a,b]];
+  const at=t=>[a[0]+dx*t,a[1]+dy*t],out=[];if(t0>1e-6)out.push([a,at(t0)]);if(t1<1-1e-6)out.push([at(t1),b]);return out}
+function clipPath(path,rects){const segs=[];
+  for(let j=0;j+1<path.length;j++){let parts=[[path[j],path[j+1]]];for(const e of rects)parts=parts.flatMap(s=>cutSeg(s[0],s[1],e));segs.push(...parts)}
+  const out=[];for(const s of segs){const l=out[out.length-1];if(l&&l[l.length-1]===s[0])l.push(s[1]);else out.push([s[0],s[1]])}
+  return out}
+/* the 1 m floor-tile lattice: from the layout's "grid" entry, or worked out from its TILE-GRID lines.
+   It is drawn as unbroken lines over the tiled area and its crossings are snap points. */
+function inferGrid(d){
+  if(d.grid&&d.grid.step)return d.grid;
+  const g=d.paths&&d.paths['TILE-GRID'];if(!g||g.length<4)return null;
+  const xs=[],ys=[];let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for(const p of g){const a=p[0],b=p[p.length-1];for(const v of p){x0=Math.min(x0,v[0]);x1=Math.max(x1,v[0]);y0=Math.min(y0,v[1]);y1=Math.max(y1,v[1])}
+    if(Math.abs(a[0]-b[0])<1e-6)xs.push(a[0]);else if(Math.abs(a[1]-b[1])<1e-6)ys.push(a[1])}
+  if(xs.length<2||ys.length<2)return null;
+  const top=m=>[...m.entries()].sort((a,b)=>b[1]-a[1])[0][0];
+  const u=[...new Set(xs.map(q=>q.toFixed(2)))].map(Number).sort((a,b)=>a-b),dc=new Map();
+  for(let i=1;i<u.length;i++){const q=r2(u[i]-u[i-1]);dc.set(q,(dc.get(q)||0)+1)}
+  const step=top(dc);if(!(step>0.1))return null;
+  const off=v=>{const m=new Map();for(const q of v){const k=r2(((q%step)+step)%step);m.set(k,(m.get(k)||0)+1)}return top(m)};
+  return{ox:off(xs),oy:off(ys),step,x0:r2(x0),y0:r2(y0),x1:r2(x1),y1:r2(y1)}}
+/* nearest grid crossing to (x,y), or null outside the tiled area / grid layer hidden */
+function gridNear(x,y){const G=U.grid;if(!G||!U.vis['TILE-GRID'])return null;
+  if(x<G.x0-0.3||x>G.x1+0.3||y<G.y0-0.3||y>G.y1+0.3)return null;
+  const sn=(v,o,lo,hi)=>{let q=o+Math.round((v-o)/G.step)*G.step;while(q<lo-1e-6)q+=G.step;while(q>hi+1e-6)q-=G.step;return r2(q)};
+  return[sn(x,G.ox,G.x0,G.x1),sn(y,G.oy,G.y0,G.y1)]}
 function findBg(x,y,tol){
   let best=null,bd=tol,bt=null,btd=tol;
-  for(const k of Object.keys(U.paths)){if(!U.vis[k])continue;const L=U.paths[k],B=U.bb[k],tile=k==='TILE-GRID';
-    for(let i=0;i<L.length;i++){const b=B[i];if(x<b[0]-tol||x>b[2]+tol||y<b[1]-tol||y>b[3]+tol)continue;if(U.hidden.has(U.keys[k][i]))continue;const p=L[i];
-      for(let j=0;j+1<p.length;j++){const d=segDist(x,y,p[j][0],p[j][1],p[j+1][0],p[j+1][1])[0];if(tile){if(d<btd){btd=d;bt={k,i}}}else if(d<bd){bd=d;best={k,i}}}}}
+  for(const k of Object.keys(U.paths)){if(!U.vis[k])continue;const L=U.paths[k],B=U.bb[k],tile=k==='TILE-GRID';if(tile&&U.grid)continue;
+    for(let i=0;i<L.length;i++){const b=B[i];if(x<b[0]-tol||x>b[2]+tol||y<b[1]-tol||y>b[3]+tol)continue;if(U.hidden.has(U.keys[k][i]))continue;
+      for(const p of pieces(k,i))for(let j=0;j+1<p.length;j++){const d=segDist(x,y,p[j][0],p[j][1],p[j+1][0],p[j+1][1])[0];if(tile){if(d<btd){btd=d;bt={k,i}}}else if(d<bd){bd=d;best={k,i}}}}}
   return best||bt}
 function boxBg(a,b){
   const x0=Math.min(a[0],b[0]),x1=Math.max(a[0],b[0]),y0=Math.min(a[1],b[1]),y1=Math.max(a[1],b[1]),out=[];
-  for(const k of Object.keys(U.paths)){if(!U.vis[k])continue;if(k==='TILE-GRID'&&!T.bgTile)continue;const B=U.bb[k];
+  for(const k of Object.keys(U.paths)){if(!U.vis[k])continue;if(k==='TILE-GRID'&&(U.grid||!T.bgTile))continue;const B=U.bb[k];
     for(let i=0;i<B.length;i++){const q=B[i];if(q[0]>=x0&&q[2]<=x1&&q[1]>=y0&&q[3]<=y1&&!U.hidden.has(U.keys[k][i]))out.push(U.keys[k][i])}}
   return out}
+function eraseBg(a,b){const e=[r2(Math.min(a[0],b[0])),r2(Math.min(a[1],b[1])),r2(Math.max(a[0],b[0])),r2(Math.max(a[1],b[1]))];
+  if(e[2]-e[0]<0.02||e[3]-e[1]<0.02){toast('กรอบเล็กเกินไป');return false}
+  commit();S.bgErase.push(e);rebuildUnderlay();T.bgHover=null;changed();renderCtx();toast('ลบเส้นในกรอบแล้ว (ตาราง 1 ม. ไม่ถูกลบ) · Ctrl+Z ย้อนได้');return true}
 function hideBg(keys){if(!keys.length){toast('ไม่เจอเส้นในบริเวณนี้');return}commit();S.bgHidden=S.bgHidden.concat(keys);rebuildUnderlay();T.bgHover=null;changed();renderCtx();toast(`ลบเส้นพื้นหลัง ${keys.length} เส้น · กดย้อนกลับได้`)}
 function buildSnap(){
   snapIdx=new Map();wallSegs=[];
   const add=(x,y)=>{const key=Math.floor(x)+','+Math.floor(y);let a=snapIdx.get(key);if(!a){a=[];snapIdx.set(key,a)}a.push([x,y])};
   for(const k of U.snapL){const L=U.paths[k];if(!L)continue;
-    for(let pi=0;pi<L.length;pi++){if(U.hidden.has(U.keys[k][pi]))continue;const path=L[pi];for(const v of path)add(v[0],v[1]);
-      if(U.wallL.includes(k))for(let i=0;i+1<path.length;i++){const a=path[i],b=path[i+1];if(Math.hypot(b[0]-a[0],b[1]-a[1])>0.4)wallSegs.push(a[0],a[1],b[0],b[1])}}}
+    for(let pi=0;pi<L.length;pi++){if(U.hidden.has(U.keys[k][pi]))continue;for(const path of pieces(k,pi)){for(const v of path)add(v[0],v[1]);
+      if(U.wallL.includes(k))for(let i=0;i+1<path.length;i++){const a=path[i],b=path[i+1];if(Math.hypot(b[0]-a[0],b[1]-a[1])>0.4)wallSegs.push(a[0],a[1],b[0],b[1])}}}}
 }
 function fitBox(){
   const xs=[],ys=[];
@@ -154,7 +197,8 @@ function snapPt(x,y,rad,opt){
   if(!T.snap||free)return{x:r2(x),y:r2(y),k:null};
   const rc=roomCorners(opt);
   let best=null,bd=rad;
-  for(const v of bgNear(x,y,rad)){const d=Math.hypot(v[0]-x,v[1]-y);if(d<bd){bd=d;best=v}}
+  const gn=gridNear(x,y);
+  for(const v of bgNear(x,y,rad).concat(gn?[gn]:[])){const d=Math.hypot(v[0]-x,v[1]-y);if(d<bd){bd=d;best=v}}
   for(const v of rc){const d=Math.hypot(v[0]-x,v[1]-y)*0.6;if(d<bd){bd=d;best=v}}
   if(best)return{x:best[0],y:best[1],k:'pt'};
   if(opt.noAlign)return{x:r2(x),y:r2(y),k:null};
@@ -162,6 +206,7 @@ function snapPt(x,y,rad,opt){
   let ax=null,bx=rad,ay=null,by=rad;
   for(const v of rc.concat(bgNear(x,y,rad*6))){const ex=Math.abs(v[0]-x),ey=Math.abs(v[1]-y);
     if(ex<bx||ex===bx&&ax&&ey<Math.abs(ax[1]-y)){bx=ex;ax=v}if(ey<by||ey===by&&ay&&ex<Math.abs(ay[0]-x)){by=ey;ay=v}}
+  if(gn){if(Math.abs(gn[0]-x)<bx){bx=Math.abs(gn[0]-x);ax=gn}if(Math.abs(gn[1]-y)<by){by=Math.abs(gn[1]-y);ay=gn}}
   if(ax||ay){const refs=[ax,ay].filter(Boolean);return{x:ax?ax[0]:r2(x),y:ay?ay[1]:r2(y),k:'ax',ref:refs[0],refs,alx:!!ax,aly:!!ay}}
   return{x:r2(x),y:r2(y),k:null}}
 /* ortho drawing for polygon rooms: a segment that is nearly horizontal/vertical locks straight,
@@ -176,7 +221,8 @@ function orthoPt(prev,x,y,rad,mod){
   if(T.snap){let on=null,bo=rad,al=null,ba=rad,bOff=1e9;
     /* corners of rooms (and of this room) line up from any distance, background points only nearby */
     const own=T.poly.slice(0,-1);
-    for(const v of bgNear(px,py,rad*4).concat(roomCorners({polyLast:true}))){const along=hz?Math.abs(v[0]-px):Math.abs(v[1]-py),off=hz?Math.abs(v[1]-py):Math.abs(v[0]-px);
+    const gq=gridNear(px,py);
+    for(const v of bgNear(px,py,rad*4).concat(roomCorners({polyLast:true}),gq?[gq]:[])){const along=hz?Math.abs(v[0]-px):Math.abs(v[1]-py),off=hz?Math.abs(v[1]-py):Math.abs(v[0]-px);
       if(along>=rad)continue;
       if(off<1e-3){if(along<bo){bo=along;on=v}}
       else{const o=own.includes(v)?-1:off;if(o<bOff||o===bOff&&along<ba){bOff=o;ba=along;al=v}}}
@@ -316,12 +362,17 @@ function draw2D(){
   if(U.loaded){
     ctx.save();ctx.setTransform(V.s*dpr,0,0,-V.s*dpr,V.tx*dpr,V.ty*dpr);ctx.globalAlpha=U.alpha;ctx.lineJoin='round';
     for(const k of Object.keys(U.p2d)){if(!U.vis[k])continue;const wall=U.wallL.includes(k)||k==='COL'||k==='01COL';
-      ctx.strokeStyle=wall?uw2:uw;ctx.lineWidth=(wall?1.2:0.8)/V.s;ctx.stroke(U.p2d[k])}
+      ctx.strokeStyle=wall?uw2:uw;ctx.lineWidth=(wall?1.2:0.8)/V.s;
+      if(k==='TILE-GRID'&&U.grid){const G=U.grid;if(G.step*V.s<4)continue;const v0=s2w(0,V.h),v1=s2w(V.w,0),gp=new Path2D();
+        const xa=Math.max(G.x0,v0[0]),xb=Math.min(G.x1,v1[0]),ya=Math.max(G.y0,v0[1]),yb=Math.min(G.y1,v1[1]);
+        if(xa<xb&&ya<yb){for(let x=G.ox+Math.ceil((xa-G.ox)/G.step-1e-9)*G.step;x<=xb+1e-9;x+=G.step){gp.moveTo(x,ya);gp.lineTo(x,yb)}
+          for(let y=G.oy+Math.ceil((ya-G.oy)/G.step-1e-9)*G.step;y<=yb+1e-9;y+=G.step){gp.moveTo(xa,y);gp.lineTo(xb,y)}ctx.stroke(gp)}continue}
+      ctx.stroke(U.p2d[k])}
     ctx.restore();
     if(U.showText){ctx.fillStyle=uw2;ctx.textAlign='left';ctx.textBaseline='alphabetic';
       for(const t of U.texts){const px=t[4]*V.s;if(px<5||!U.vis[t[0]]&&false)continue;const p=w2s(t[2],t[3]);if(p[0]<-50||p[0]>V.w+50||p[1]<-50||p[1]>V.h+50)continue;ctx.save();ctx.translate(p[0],p[1]);if(t[5])ctx.rotate(-t[5]);ctx.font=`${Math.min(px,40)}px ${css('--font')}`;ctx.fillText(t[1],0,0);ctx.restore()}}
   }
-  if(T.tool==='bg'&&T.bgHover&&U.paths[T.bgHover.k]){const p=U.paths[T.bgHover.k][T.bgHover.i];ctx.beginPath();p.forEach((v,i)=>{const q=w2s(v[0],v[1]);i?ctx.lineTo(q[0],q[1]):ctx.moveTo(q[0],q[1])});ctx.strokeStyle=css('--err');ctx.lineWidth=3.5;ctx.stroke()}
+  if(T.tool==='bg'&&T.bgHover&&U.paths[T.bgHover.k]){ctx.beginPath();for(const p of pieces(T.bgHover.k,T.bgHover.i))p.forEach((v,i)=>{const q=w2s(v[0],v[1]);i?ctx.lineTo(q[0],q[1]):ctx.moveTo(q[0],q[1])});ctx.strokeStyle=css('--err');ctx.lineWidth=3.5;ctx.stroke()}
   if(T.bgBox){const a=w2s(...T.bgBox[0]),b=w2s(...T.bgBox[1]);ctx.save();ctx.setLineDash([6,4]);ctx.strokeStyle=css('--err');ctx.lineWidth=1.5;ctx.strokeRect(Math.min(a[0],b[0]),Math.min(a[1],b[1]),Math.abs(a[0]-b[0]),Math.abs(a[1]-b[1]));ctx.globalAlpha=0.07;ctx.fillStyle=css('--err');ctx.fillRect(Math.min(a[0],b[0]),Math.min(a[1],b[1]),Math.abs(a[0]-b[0]),Math.abs(a[1]-b[1]));ctx.restore()}
   // rooms
   for(const r of S.rooms){
@@ -374,7 +425,7 @@ function draw2D(){
     for(const rf of(T.hover.refs||[T.hover.ref])){const a=w2s(...rf);ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1])}ctx.stroke();ctx.setLineDash([]);
     ctx.beginPath();ctx.arc(b[0],b[1],4,0,7);ctx.stroke();ctx.restore();ctx.strokeStyle=acc;ctx.fillStyle=acc;ctx.lineWidth=2}
   if(T.tool==='room'&&T.pend&&T.hover){const a=w2s(T.pend[0],T.pend[1]),b=w2s(T.hover.x,T.hover.y);ctx.setLineDash([6,4]);ctx.strokeRect(Math.min(a[0],b[0]),Math.min(a[1],b[1]),Math.abs(a[0]-b[0]),Math.abs(a[1]-b[1]));ctx.setLineDash([]);
-    const w=Math.abs(T.hover.x-T.pend[0]),h=Math.abs(T.hover.y-T.pend[1]);drawLabel(ctx,`${fmt(w,1)} × ${fmt(h,1)} ม.`,(a[0]+b[0])/2,Math.min(a[1],b[1])-10,12,acc,true)}
+    const w=Math.abs(T.hover.x-T.pend[0]),h=Math.abs(T.hover.y-T.pend[1]);drawLabel(ctx,`${fmt(w,2)} × ${fmt(h,2)} ม.`,(a[0]+b[0])/2,Math.min(a[1],b[1])-10,12,acc,true)}
   if(T.tool==='measure'&&T.meas.length){const pts=T.meas.slice();if(pts.length===1&&T.hover)pts.push([T.hover.x,T.hover.y]);
     const a=w2s(...pts[0]);ctx.beginPath();ctx.moveTo(a[0],a[1]);if(pts[1]){const b=w2s(...pts[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();drawLabel(ctx,`${fmt(Math.hypot(pts[1][0]-pts[0][0],pts[1][1]-pts[0][1]))} ม.`,(a[0]+b[0])/2,(a[1]+b[1])/2-12,13,acc,true)}
     pts.forEach(v=>{const p=w2s(...v);ctx.beginPath();ctx.arc(p[0],p[1],4,0,7);ctx.fill()})}
@@ -412,7 +463,7 @@ function draw3D(){
   const cY=Math.cos(V3.yaw),sY=Math.sin(V3.yaw),sP=Math.sin(V3.pitch),cP=Math.cos(V3.pitch);
   const pr=(x,y,z)=>{const dx=x-V3.cx,dy=y-V3.cy,xr=dx*cY-dy*sY,yr=dx*sY+dy*cY;return[W/2+V3.px+xr*V3.s,H/2+V3.py-(yr*sP+z*cP)*V3.s,yr*cP-z*sP]};
   if(V3.under&&U.loaded){ctx.lineWidth=1;ctx.strokeStyle=css('--uw2');ctx.globalAlpha=0.55;ctx.beginPath();
-    for(const k of U.wallL.concat(['COL','01COL'])){const L=U.paths[k];if(!L||!U.vis[k])continue;for(let pi=0;pi<L.length;pi++){if(U.hidden.has(U.keys[k][pi]))continue;const p=L[pi];let first=true;for(const v of p){const q=pr(v[0],v[1],0);first?ctx.moveTo(q[0],q[1]):ctx.lineTo(q[0],q[1]);first=false}}}
+    for(const k of U.wallL.concat(['COL','01COL'])){const L=U.paths[k];if(!L||!U.vis[k])continue;for(let pi=0;pi<L.length;pi++){if(U.hidden.has(U.keys[k][pi]))continue;for(const p of pieces(k,pi)){let first=true;for(const v of p){const q=pr(v[0],v[1],0);first?ctx.moveTo(q[0],q[1]):ctx.lineTo(q[0],q[1]);first=false}}}}
     ctx.stroke();ctx.globalAlpha=1}
   for(const r of S.rooms){const col=roomColor(r);ctx.beginPath();r.pts.forEach((v,i)=>{const q=pr(v[0],v[1],0);i?ctx.lineTo(q[0],q[1]):ctx.moveTo(q[0],q[1])});ctx.closePath();ctx.globalAlpha=0.3;ctx.fillStyle=col;ctx.fill();ctx.globalAlpha=1;ctx.strokeStyle=col;ctx.lineWidth=1.5;ctx.stroke()}
   const faces=[];
@@ -473,7 +524,8 @@ c2.addEventListener('pointerdown',e=>{
   if(tool==='room'){const s=snapPt(w[0],w[1],snapRad());drag={t:'rect',p0:[s.x,s.y],sx:sp[0],sy:sp[1],moved:false};T.hover=s;return}
   if(tool==='bg'){
     if(T.bgLock){drag={t:'pan',sx:sp[0],sy:sp[1],tx:V.tx,ty:V.ty,moved:false,lockMsg:true};return}
-    if(T.bgMode==='box'){drag={t:'bgbox',p0:w,sx:sp[0],sy:sp[1],moved:false};return}}
+    if(T.bgMode==='box'){drag={t:'bgbox',p0:w,sx:sp[0],sy:sp[1],moved:false};return}
+    if(T.bgMode==='erase'){const s=snapPt(w[0],w[1],snapRad(),{noAlign:true});drag={t:'bgbox',erase:true,p0:[s.x,s.y],sx:sp[0],sy:sp[1],moved:false};return}}
   drag={t:'tap',sx:sp[0],sy:sp[1],tx:V.tx,ty:V.ty,moved:false}
 });
 c2.addEventListener('pointermove',e=>{
@@ -491,7 +543,7 @@ c2.addEventListener('pointermove',e=>{
     case'moveroom':{if(!drag.moved)break;if(!drag.committed){commit();drag.committed=true}const[ddx,ddy]=moveSnap(drag.r,drag.pts,w[0]-drag.lx,w[1]-drag.ly);drag.r.pts=drag.pts.map(p=>[r2(p[0]+ddx),r2(p[1]+ddy)]);changed(true,true);break}
     case'vtx':{const s=vtxPt(drag.r,drag.i,w[0],w[1]);drag.r.pts[drag.i]=[s.x,s.y];T.hover=s;changed(true,true);break}
     case'rect':{const s=snapPt(w[0],w[1],snapRad());T.hover=s;T.pend=drag.p0;render();break}
-    case'bgbox':{if(!drag.moved)break;T.bgBox=[drag.p0,w];render();break}
+    case'bgbox':{if(!drag.moved)break;let q=w;if(drag.erase){const s=snapPt(w[0],w[1],snapRad(),{noAlign:true});q=[s.x,s.y]}T.bgBox=[drag.p0,q];render();break}
     case'movepts':{if(!drag.moved)break;if(!drag.committed){commit();drag.committed=true}const dx=w[0]-drag.lx,dy=w[1]-drag.ly,mv=p=>[r2(p[0]+dx),r2(p[1]+dy)];
       if(drag.type==='flow')drag.o.pts=drag.orig.pts.map(mv);else{drag.o.a=mv(drag.orig.a);drag.o.b=mv(drag.orig.b)}changed(true,true);break}
   }
@@ -503,6 +555,7 @@ function endPointer(e){
   if(d.t==='pan'&&d.rmb&&!d.far){cancelDraw();return}
   if(d.t==='pan'&&!d.moved&&d.desel){setSel(null);return}
   if(d.t==='pan'&&!d.moved&&d.lockMsg){toast('พื้นหลังล็อกอยู่ กด “ปลดล็อก” ก่อนลบเส้น');return}
+  if(d.t==='bgbox'&&d.erase){T.bgBox=null;if(d.moved){const s=snapPt(w[0],w[1],snapRad(),{noAlign:true});eraseBg(d.p0,[s.x,s.y])}else toast('ลากเป็นกรอบ เส้นเฉพาะส่วนที่อยู่ในกรอบจะถูกลบ');render();return}
   if(d.t==='bgbox'){T.bgBox=null;if(d.moved)hideBg(boxBg(d.p0,w));else{const h=findBg(w[0],w[1],Math.max(0.15,12/V.s));hideBg(h?[U.keys[h.k][h.i]]:[])}render();return}
   if(d.t==='taproom'&&!d.moved){setSel('room',d.r.id);return}
   if(d.t==='vtx'||d.t==='move'||d.t==='moveroom'||d.t==='movepts'){renderDock();changed(false);return}
@@ -612,9 +665,10 @@ function renderCtx(){
   else if(T.tool==='flow')h=FLOWS.map(f=>`<button class="chip" data-flow="${f.k}" aria-pressed="${T.flow.k===f.k}"><span class="sw" style="background:${f.col}"></span>${esc(f.n)}</button>`).join('')+`<button class="chip go" data-act="flowdone">เสร็จ (${T.fpts.length} จุด)</button><button class="chip" data-act="flowundo">ลบจุดล่าสุด</button><span class="hint">แตะทีละจุดตามทางเดิน แตะจุดสุดท้ายซ้ำเพื่อจบ</span>`;
   else if(T.tool==='dim')h='<span class="hint">แตะ 2 จุดเพื่อเขียนเส้นบอกขนาด (มม.) ค้างไว้บนแบบ</span>';
   else if(T.tool==='bg')h=`<button class="chip${T.bgLock?'':' go'}" data-act="bglock">${T.bgLock?'🔒 ล็อกอยู่ · แตะเพื่อปลดล็อก':'🔓 ปลดล็อกแล้ว · แตะเพื่อล็อก'}</button>`
-    +`<button class="chip" data-act="bgmode" data-v="tap" aria-pressed="${T.bgMode==='tap'}">แตะลบทีละเส้น</button><button class="chip" data-act="bgmode" data-v="box" aria-pressed="${T.bgMode==='box'}">ลากกรอบลบ</button>`
-    +(T.bgMode==='box'?`<button class="chip" data-act="bgtile" aria-pressed="${T.bgTile}">รวมเส้นตาราง</button>`:'')
-    +`<span class="hint">ลบไปแล้ว ${S.bgHidden.length} เส้น</span>`+(S.bgHidden.length?'<button class="chip" data-act="bgrestore">คืนเส้นทั้งหมด</button>':'');
+    +`<button class="chip" data-act="bgmode" data-v="tap" aria-pressed="${T.bgMode==='tap'}">แตะลบทีละเส้น</button><button class="chip" data-act="bgmode" data-v="box" aria-pressed="${T.bgMode==='box'}">ลากกรอบลบทั้งเส้น</button><button class="chip" data-act="bgmode" data-v="erase" aria-pressed="${T.bgMode==='erase'}">🧽 ยางลบ</button>`
+    +(T.bgMode==='box'&&!U.grid?`<button class="chip" data-act="bgtile" aria-pressed="${T.bgTile}">รวมเส้นตาราง</button>`:'')
+    +(T.bgMode==='erase'?'<span class="hint">ลากกรอบ: ตัดเฉพาะส่วนของเส้นที่อยู่ในกรอบ (เช่น ผนังที่จะทุบ) มุมกรอบดูดติดตาราง/ผนัง · ตาราง 1 ม. ไม่ถูกลบ</span>':'')
+    +`<span class="hint">ลบไปแล้ว ${S.bgHidden.length} เส้น${S.bgErase.length?` · ยางลบ ${S.bgErase.length} กรอบ`:''}</span>`+(S.bgHidden.length||S.bgErase.length?'<button class="chip" data-act="bgrestore">คืนเส้นทั้งหมด</button>':'');
   else if(T.tool==='measure')h='<span class="hint">แตะ 2 จุดเพื่อวัดระยะ</span>';
   else h='<span class="hint">แตะวัตถุเพื่อเลือก ลากเครื่องจักรหรือประตูเพื่อย้าย ลากพื้นที่ว่างเพื่อเลื่อนแบบ · ดับเบิลคลิกขอบห้อง = เพิ่มมุม · ดับเบิลคลิกมุม = ลบมุม</span>';
   c.innerHTML=h;
@@ -698,7 +752,7 @@ function layoutsHTML(){
 function layersHTML(){
   if(!U.loaded)return layoutsHTML();
   const names=Object.keys(U.paths).sort((a,b)=>U.cnt[b]-U.cnt[a]);
-  return layoutsHTML()+`<h3>เลเยอร์</h3>${S.bgHidden.length?`<div class="row"><span class="muted">ลบเส้นพื้นหลังไปแล้ว ${S.bgHidden.length} เส้น</span><button class="btn" data-act="bgrestore2">คืนทั้งหมด</button></div>`:''}<div class="row"><button class="btn" data-act="lay-walls">เฉพาะผนังและเสา</button><button class="btn" data-act="lay-def">ค่าตั้งต้น</button><button class="btn" data-act="lay-all">ทั้งหมด</button></div>
+  return layoutsHTML()+`<h3>เลเยอร์</h3>${S.bgHidden.length||S.bgErase.length?`<div class="row"><span class="muted">ลบเส้นพื้นหลังไปแล้ว ${S.bgHidden.length} เส้น${S.bgErase.length?` · ยางลบ ${S.bgErase.length} กรอบ`:''}</span><button class="btn" data-act="bgrestore2">คืนทั้งหมด</button></div>`:''}<div class="row"><button class="btn" data-act="lay-walls">เฉพาะผนังและเสา</button><button class="btn" data-act="lay-def">ค่าตั้งต้น</button><button class="btn" data-act="lay-all">ทั้งหมด</button></div>
   <label class="muted">ความเข้มของแบบพื้นหลัง<input type="range" min="0.1" max="1" step="0.05" value="${U.alpha}" data-alpha></label>
   <label class="lay"><input type="checkbox" data-txt ${U.showText?'checked':''}><span>แสดงข้อความในแบบ</span></label>
   ${names.map(n=>`<label class="lay"><input type="checkbox" data-lay="${esc(n)}" ${U.vis[n]?'checked':''}><span>${esc(n)}</span><span class="c">${U.cnt[n]}</span></label>`).join('')}`;
@@ -770,7 +824,7 @@ $('#pane').addEventListener('click',e=>{
   else if(a==='lay-open'){$('#lfile').click()}
   else if(a==='lay-use'){const x=getLayouts()[b.dataset.id];if(x)useLayout(x.data)}
   else if(a==='lay-del'){const A=getLayouts();delete A[b.dataset.id];try{localStorage.setItem(LKEY,JSON.stringify(A))}catch(e){}renderDock()}
-  else if(a==='bgrestore2'){commit();S.bgHidden=[];rebuildUnderlay();changed();renderCtx()}
+  else if(a==='bgrestore2'){commit();S.bgHidden=[];S.bgErase=[];rebuildUnderlay();changed();renderCtx()}
   else if(a==='lay-all'){for(const k in U.vis)U.vis[k]=true;renderDock();render()}
 });
 $('#tabs').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;const dock=$('#dock');
@@ -789,7 +843,7 @@ $('#ctx').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)
   else if(b.dataset.act==='bglock'){T.bgLock=!T.bgLock;T.bgHover=null;renderCtx();render()}
   else if(b.dataset.act==='bgmode'){T.bgMode=b.dataset.v;T.bgHover=null;renderCtx();render()}
   else if(b.dataset.act==='bgtile'){T.bgTile=!T.bgTile;renderCtx()}
-  else if(b.dataset.act==='bgrestore'){if(!S.bgHidden.length)return;commit();S.bgHidden=[];rebuildUnderlay();changed();renderCtx();toast('คืนเส้นพื้นหลังทั้งหมดแล้ว')}
+  else if(b.dataset.act==='bgrestore'){if(!S.bgHidden.length&&!S.bgErase.length)return;commit();S.bgHidden=[];S.bgErase=[];rebuildUnderlay();changed();renderCtx();toast('คืนเส้นพื้นหลังทั้งหมดแล้ว')}
   else if(b.dataset.act==='polydone')finishPoly();
   else if(b.dataset.act==='polyundo'){T.poly.pop();renderCtx();render()}
   else if(b.dataset.c3){if(b.dataset.c3==='under')V3.under=!V3.under;else S.cfg.colorBy=b.dataset.c3;renderCtx();renderLegend();render()}});
@@ -836,7 +890,7 @@ function csvStr(){
 /* embed=true (files to carry to another computer): the background layout goes inside, so one file opens everything */
 function projectJSON(embed){
   const o={app:'plant-layout-studio',v:PROJECT_FORMAT,appVersion:APP_VERSION,layoutRef:U.loaded?{id:U.id,name:U.name,origin:U.origin}:null,
-    rooms:S.rooms,machines:S.machines,doors:S.doors,flows:S.flows,dims:S.dims,bgHidden:S.bgHidden,cfg:S.cfg,nextId};
+    rooms:S.rooms,machines:S.machines,doors:S.doors,flows:S.flows,dims:S.dims,bgHidden:S.bgHidden,bgErase:S.bgErase,cfg:S.cfg,nextId};
   if(embed&&U.loaded)o.layout=U.raw;
   return JSON.stringify(o,null,embed?0:1)}
 const CRC=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0}return t})();
@@ -874,7 +928,8 @@ function shiftProject(dx,dy){const mv=p=>[r2(p[0]+dx),r2(p[1]+dy)];
   for(const r of S.rooms)r.pts=r.pts.map(mv);for(const m of S.machines){m.x=r2(m.x+dx);m.y=r2(m.y+dy)}for(const d of S.doors){d.x=r2(d.x+dx);d.y=r2(d.y+dy)}
   for(const f of S.flows)f.pts=f.pts.map(mv);for(const d of S.dims){d.a=mv(d.a);d.b=mv(d.b)}
   const f2=v=>(+v).toFixed(2);
-  S.bgHidden=S.bgHidden.map(k=>{const m=/^(.*)@([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),(\d+)$/.exec(k);return m?`${m[1]}@${f2(+m[2]+dx)},${f2(+m[3]+dy)},${f2(+m[4]+dx)},${f2(+m[5]+dy)},${m[6]}`:k})}
+  S.bgHidden=S.bgHidden.map(k=>{const m=/^(.*)@([-\d.]+),([-\d.]+),([-\d.]+),([-\d.]+),(\d+)$/.exec(k);return m?`${m[1]}@${f2(+m[2]+dx)},${f2(+m[3]+dy)},${f2(+m[4]+dx)},${f2(+m[5]+dy)},${m[6]}`:k});
+  S.bgErase=S.bgErase.map(e=>[r2(e[0]+dx),r2(e[1]+dy),r2(e[2]+dx),r2(e[3]+dy)])}
 function useLayout(raw,opt={}){
   let L;try{L=normLayout(raw)}catch(e){toast('ไฟล์นี้ไม่ใช่แบบพื้นหลัง');return false}
   const has=S.rooms.length||S.machines.length||S.doors.length||S.flows.length||S.dims.length;
@@ -1013,5 +1068,5 @@ async function init(){
   try{const qp=new URLSearchParams(location.search).get('project');if(qp){const o=await (await fetch(qp,{cache:'no-store'})).json();if(o&&o.rooms){layoutFor(o);applyProj(o);nextId=Math.max(o.nextId||1,nextId);changed();fitView();setCur(null);updTitle('เปิดจาก '+qp)}}}catch(e){toast('เปิดไฟล์โครงการจากลิงก์ไม่ได้')}
   if(!had&&!S.rooms.length){/* start empty with the underlay; demo is in the menu */}
 }
-window.__app={useLayout,getLayouts,normLayout,loadProjObj,saveDraft,openDraft,getDrafts,draftsDialog,quickSave,S,T,V,U,V3,findBg,boxBg,hideBg,finishFlow,tapTool,orthoPt,vtxPt,moveSnap,snapPt,editVertexAt,MOD,resizeRoom,roomSize,cancelDraw,delSel,doUndo,rebuildUnderlay,sumHTML,propsHTML,commit,changed,runChecks,loadDemo,setView,fitView,doorGeom,machinePoly,dxfStr,csvStr,zipBlob,projectJSON,setSel,render};
+window.__app={useLayout,getLayouts,normLayout,loadProjObj,saveDraft,openDraft,getDrafts,draftsDialog,quickSave,S,T,V,U,V3,findBg,boxBg,hideBg,finishFlow,tapTool,orthoPt,vtxPt,moveSnap,snapPt,eraseBg,gridNear,pieces,editVertexAt,MOD,resizeRoom,roomSize,cancelDraw,delSel,doUndo,rebuildUnderlay,sumHTML,propsHTML,commit,changed,runChecks,loadDemo,setView,fitView,doorGeom,machinePoly,dxfStr,csvStr,zipBlob,projectJSON,setSel,render};
 init();

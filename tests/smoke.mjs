@@ -43,7 +43,7 @@ t('double-click room edge adds a corner, corner removes it',()=>{const r={id:910
   const sp=w=>[w[0]*A.V.s+A.V.tx,-w[1]*A.V.s+A.V.ty];
   assert(A.editVertexAt(105,100,sp([105,100])));assert.equal(r.pts.length,5);assert.deepEqual(r.pts[1],[105,100]);
   assert(A.editVertexAt(105,100,sp([105,100])));assert.equal(r.pts.length,4);
-  const v=A.vtxPt({pts:[[0,0],[5,0.02],[5,5]]},1,5.1,0.1,{free:false});assert(v.x===5&&v.y===0,'corner lines up with neighbours');
+  const v=A.vtxPt({pts:[[100,100],[105,100.02],[105,105]]},1,105.1,100.1,{free:false});assert(v.x===105&&v.y===100,'corner lines up with neighbours');
   S.rooms=S.rooms.filter(q=>q!==r)});
 t('room width/length resize keeps left/bottom edge, refuses to cross an L notch',()=>{
   const r={id:9200,name:'R',type:'other',grade:'D',pa:15,h:3,pts:[[0,0],[10,0],[10,4],[6,4],[6,8],[0,8]]};S.rooms.push(r);
@@ -52,5 +52,13 @@ t('room width/length resize keeps left/bottom edge, refuses to cross an L notch'
   assert(!A.resizeRoom(r,0,5),'would cross the notch');assert.equal(A.roomSize(r)[0],12);S.rooms=S.rooms.filter(q=>q!==r)});
 t('delete then undo brings the room back · cancel clears a half-drawn room',()=>{const n=S.rooms.length;A.setSel('room',S.rooms[0].id);A.delSel();assert.equal(S.rooms.length,n-1);A.doUndo();assert.equal(S.rooms.length,n);
   T.poly=[[1,1],[2,1]];assert(A.cancelDraw());assert.equal(T.poly.length,0);assert(!A.cancelDraw(),'nothing left to cancel')});
+t('1 m grid worked out from the layout; crossings snap',()=>{const G=A.U.grid;assert(G&&G.step===1&&G.ox===0.5&&G.oy===0.5,JSON.stringify(G));
+  A.V.s=20;T.snap=true;const s=A.snapPt(10.52,12.48,0.1);assert(s.k==='pt'&&s.x===10.5&&s.y===12.5,JSON.stringify(s));assert.equal(A.gridNear(-5,-5),null)});
+t('eraser cuts only the part inside the box, keeps the grid, saved in the file, undo restores',()=>{
+  const i=A.U.paths.WALL.findIndex((p,j)=>!A.U.hidden.has(A.U.keys.WALL[j]));assert.equal(A.pieces('WALL',i).length,1);const nT=A.U.cnt['TILE-GRID'];
+  assert(A.eraseBg([10,0],[12,1]));const pc=A.pieces('WALL',i);assert.equal(pc.length,2);
+  assert(pc.every(p=>p.every(v=>!(v[0]>10.001&&v[0]<11.999&&v[1]<1))),'nothing left inside the box');assert.equal(A.U.cnt['TILE-GRID'],nT,'grid untouched');
+  const o=JSON.parse(A.projectJSON(false));assert.equal(o.v,4);assert.deepEqual(o.bgErase,[[10,0,12,1]]);
+  A.doUndo();assert.equal(A.pieces('WALL',i).length,1);assert.equal(S.bgErase.length,0)});
 t('DXF has entities',()=>{const d=A.dxfStr();assert(d.includes('PH-ROOM')&&d.trim().endsWith('EOF'))});
 console.log(`${ok} checks passed`);
