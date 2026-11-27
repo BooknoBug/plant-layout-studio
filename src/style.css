@@ -28,7 +28,9 @@ body{background:var(--bg);color:var(--ink);font:14px/1.45 var(--font);overflow:h
 button,input,select{font:inherit;color:inherit}
 button{cursor:pointer}
 :focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-#app{height:100%;display:grid;grid-template-rows:auto auto auto minmax(0,1fr);grid-template-columns:minmax(0,1fr);}
+#app{height:100%;display:grid;grid-template-rows:auto auto auto auto minmax(0,1fr);grid-template-columns:minmax(0,1fr);}
+#app>#work{grid-row:5}
+#plants[hidden]{display:none}
 header{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
 header h1{font-size:15px;font-weight:600;margin:0;white-space:nowrap}
 header h1 small{display:block;font-weight:400;font-size:11px;color:var(--muted)}
@@ -39,6 +41,13 @@ header h1 small{display:block;font-weight:400;font-size:11px;color:var(--muted)}
 .ibtn{border:1px solid var(--line);background:var(--panel2);border-radius:8px;min-width:36px;min-height:34px;padding:4px 10px}
 .ibtn:disabled{opacity:.4;cursor:default}
 .ibtn:hover:not(:disabled){border-color:var(--accent)}
+#plants{display:flex;gap:4px;padding:6px 12px 0;background:var(--panel2);border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:thin}
+.ptab{flex:none;border:1px solid var(--line);border-bottom:none;background:var(--panel2);color:var(--muted);border-radius:8px 8px 0 0;padding:6px 14px;font-size:13px;white-space:nowrap;margin-bottom:-1px}
+.ptab[aria-selected="true"]{background:var(--panel);color:var(--ink);font-weight:600;border-color:var(--line);border-bottom:1px solid var(--panel)}
+.ptab:hover{color:var(--ink)}
+.ptab.add{border-style:dashed;color:var(--accent)}
+.ptab.ed{padding:6px 10px}
+.ptab .pc{font-weight:400;color:var(--accent);font-size:12px}
 .collab{border:1px solid var(--ok);color:var(--ok);background:var(--panel);border-radius:999px;min-height:32px;padding:3px 11px;font-size:12px;white-space:nowrap}
 .collab.busy{border-color:var(--info);color:var(--info)}
 .collab.bad{border-color:var(--warn);color:var(--warn);background:var(--warn-bg)}
@@ -57,6 +66,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none;displa
 #c3{display:none}
 .float{position:absolute;right:10px;top:10px;display:flex;flex-direction:column;gap:6px}
 .float button{width:38px;height:38px;border-radius:8px;border:1px solid var(--line);background:var(--panel);font-size:18px;line-height:1;padding:0}
+.float button[aria-pressed="false"]{opacity:.5;border-style:dashed}
 #toast{position:absolute;left:50%;top:10px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:6px 12px;border-radius:8px;font-size:13px;max-width:80%;opacity:0;pointer-events:none;transition:opacity .2s}
 #toast.on{opacity:.95}
 #legend{position:absolute;left:10px;bottom:10px;background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-size:12px;display:flex;flex-wrap:wrap;gap:4px 10px;max-width:70%}

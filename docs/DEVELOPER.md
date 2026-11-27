@@ -50,7 +50,9 @@ cfg      {minAisle, minDP, wallH, colorBy, ach:{grade:n}, spec:{grade:text}}
 ```
 {format:'pls-layout', v:1, id, name, floor, building, source, note, created, units:'m',
  origin:[dwgX,dwgY], bbox, paths:{LAYER:[[[x,y]...]...]}, texts:[[layer,text,x,y,h,rot]...],
- wallLayers?, snapLayers?, defaultVisible?, demoBox?}
+ wallLayers?, snapLayers?, defaultVisible?, demoBox?,
+ grid?:{ox,oy,step,x0,y0,x1,y1},               ตาราง 1 ม. (ไม่ใส่ = หาเองจาก TILE-GRID)
+ image?:{src:'data:image/jpeg;base64,…', x0,y0,x1,y1}}   รูปพื้นหลัง (จากสแกน/PDF) วางตามกรอบเมตร
 ```
 1. `dwgread -O JSON -o plan.json แบบ.dwg` (LibreDWG 0.13.3 build จากซอร์ส รองรับ AC1032)
 2. `python3 tools/extract_sheet.py plan.json --box X0 Y0 X1 Y1 --out source/<ชื่อ>_raw.json`
@@ -58,14 +60,21 @@ cfg      {minAisle, minDP, wallH, colorBy, ach:{grade:n}, spec:{grade:text}}
 3. คัดลอก `tools/layouts/pd2_floor2.py` เป็นสูตรใหม่ แก้ตัด/ตีตาราง/`META`/`LAYOUT_ID` → `layouts/<NAME>.layout.json`
 4. ส่งไฟล์ให้ผู้ใช้เปิดในโปรแกรม (ไม่ commit) · ถ้าเลเยอร์ผนังชื่อต่างจากเดิม ใส่ `wallLayers` ในไฟล์
 - รุ่นแก้ของแบบเดิม: เพิ่ม `LAYOUT_ID` (r2, r3 …) · ถ้า origin เปลี่ยน โปรแกรมเลื่อนงานที่วาดไว้ให้อยู่ตำแหน่ง DWG เดิมเอง (`shiftProject`)
+- **ไม่มี DWG มีแต่ภาพสแกน/PDF รูป**: ดึงรูปจาก PDF → หาตำแหน่งแนวเสาเป็นพิกเซล → วาดใหม่ทีละช่วงเสาให้ได้ 6/8 ม. พอดี (แก้ภาพบิด)
+  → ใส่เป็น `image` + สร้าง `AR-GRID LINES`, `COL`, `TILE-GRID` และ `grid` เอง (ทำครั้งแรก 27 พ.ย. 2026 ด้วย canvas ในเบราว์เซอร์)
+  ความแม่นยำราว ±10-15 ซม. · ไม่มีเส้นผนังจริง ผู้ใช้วาดห้องทับรูปเอง
 - อ่าน DWG JSON แบบ UTF-8 errors='replace' (ภาษาไทยถูก) · entity ใน model space = ตัวที่ไม่มี `ownerhandle`
 
 ## แก้ไขพร้อมกัน (collab.js)
 - ทำงานเฉพาะเมื่อ `claude.use('db')` ได้ (หน้า Claude artifact) นอกนั้น `collabStart()` ออกทันที
 - publish: `python3 tools/build.py --out dist/plant-layout-studio.html` แล้ว publish ไฟล์นี้เป็น artifact เดิม (URL เดิม)
   capabilities `{db:{}, user:{scopes:["profile"]}, room:{}, assets:{}, downloads:true}` · ห้ามใช้ `--embed` (แบบพื้นหลังอยู่ใน asset)
-- db collection `items`: `room-<id>`, `machine-<id>`, `door-<id>`, `flow-<id>`, `dim-<id>` = `{o:<object>}` · `cfg` · `bg` `{o:{h:bgHidden,e:bgErase}}`
+- **หลาย plant (แท็บ)**: registry `plants/<id>` = `{name, order, col}` · plant แรกใช้ `col:'items'` (doc `plants/main`) · plant ใหม่ `plants/<id>/items`
+  สลับแท็บ = `switchPlant()` ล้าง S/undo แล้ว subscribe collection ใหม่ · presence มี `plant` (วาดเคอร์เซอร์เฉพาะคนใน plant เดียวกัน)
+- ใน collection ของแต่ละ plant: `room-<id>`, `machine-<id>`, `door-<id>`, `flow-<id>`, `dim-<id>` = `{o:<object>}` · `cfg` · `bg` `{o:{h:bgHidden,e:bgErase}}`
   · `layout` `{asset,id,name,origin}` (ไฟล์ .layout.json เป็น asset, โหลดจาก `/_blob/<asset>`)
+- ใส่ plant ให้ผู้ใช้จากฝั่ง Claude ได้: อัปโหลด layout เป็น asset (Artifact publish `asset:true`) แล้วเขียน registry + docs ด้วย ArtifactData batch
+- ระวัง: หน้า artifact อาจถูกแก้จากที่อื่น (เช่นอีกแชต) อ่านเวอร์ชันล่าสุดแล้ว diff กับ build ของเรา นำส่วนที่เพิ่มกลับมาใส่ src ก่อน publish
 - จับการแก้โดย diff `S` กับ `CO.base` ทุกครั้งที่ `changed()` (hook `HIST` ใน app.js) → เขียนทีละ doc ครั้งละ 1 ต่อ doc
   เพิ่มชนิดของใหม่ใน `LK` แล้วซิงก์ให้เอง · field ใหม่ใน cfg ก็ซิงก์เอง
 - undo ในโหมดนี้: ทุก `commit()` เปิดขั้น `{b,a}` เก็บเฉพาะ doc ที่คนนั้นแก้ (ไม่ใช่ snapshot ทั้งงาน)
