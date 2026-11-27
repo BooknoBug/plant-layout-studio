@@ -3,7 +3,7 @@
    room types (default grade / pressure), flow types, cleanliness grades, ACH and room-condition defaults,
    and which background layers count as walls. Values are planning defaults, not regulatory limits. */
 'use strict';
-const APP_VERSION='1.9.1';
+const APP_VERSION='1.10.0';
 const LIB=[
  {k:'press',n:'เครื่องตอกเม็ด',w:1.5,d:1.3,h:2.2,c:0.8,col:'#3b5bdb'},
  {k:'blender',n:'เครื่องผสมแห้ง',w:2.0,d:1.6,h:2.5,c:0.8,col:'#3b5bdb'},

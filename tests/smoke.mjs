@@ -64,5 +64,14 @@ t('door is picked by its leaf / swing area, ahead of the room under it',()=>{con
   const r={id:9401,name:'R',type:'other',grade:'D',pa:15,h:3,pts:[[100,100],[110,100],[110,110],[100,110]]};S.doors.push(d);S.rooms.push(r);A.V.s=40;
   assert(A.doorHit(d,104.8,105.5,0.1),'inside swing');assert(!A.doorHit(d,104.8,104.5,0.1),'other side of wall');assert(!A.doorHit(d,106,107,0.1),'far away');
   const h=A.hitTest(104.8,105.5);assert(h&&h.type==='door'&&h.obj===d);S.doors=S.doors.filter(q=>q!==d);S.rooms=S.rooms.filter(q=>q!==r)});
+t('group move: machine inside, door on the wall, flow inside move with the room; outside things stay',()=>{
+  const r={id:9500,name:'G',type:'other',grade:'D',pa:15,h:3,pts:[[200,200],[210,200],[210,208],[200,208]]};
+  const m={id:9501,k:'x',name:'M',x:205,y:204,w:1,d:1,h:1,clear:0,rot:0},o={id:9502,k:'x',name:'O',x:215,y:204,w:1,d:1,h:1,clear:0,rot:0};
+  const d={id:9503,name:'D',x:205,y:200,ang:0,w:0.9,dbl:false,side:1,hinge:1},f={id:9504,kind:'material',name:'F',pts:[[201,201],[209,207]]};
+  S.rooms.push(r);S.machines.push(m,o);S.doors.push(d);S.flows.push(f);
+  const g=A.roomMembers(r);assert.deepEqual(g.n,{m:1,d:1,f:1,l:0});A.moveMembers(g,3,-2);
+  assert(m.x===208&&m.y===202&&d.x===208&&d.y===198&&o.x===215,'inside moved, outside stayed');assert.deepEqual(f.pts,[[204,199],[212,205]]);
+  assert.equal(S.cfg.groupMove,true,'on by default');
+  S.rooms=S.rooms.filter(q=>q!==r);S.machines=S.machines.filter(q=>q!==m&&q!==o);S.doors=S.doors.filter(q=>q!==d);S.flows=S.flows.filter(q=>q!==f)});
 t('DXF has entities',()=>{const d=A.dxfStr();assert(d.includes('PH-ROOM')&&d.trim().endsWith('EOF'))});
 console.log(`${ok} checks passed`);

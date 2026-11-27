@@ -166,7 +166,7 @@ dialog::backdrop{background:rgba(0,0,0,.4)}
    room types (default grade / pressure), flow types, cleanliness grades, ACH and room-condition defaults,
    and which background layers count as walls. Values are planning defaults, not regulatory limits. */
 'use strict';
-const APP_VERSION='1.9.1';
+const APP_VERSION='1.10.0';
 const LIB=[
  {k:'press',n:'เครื่องตอกเม็ด',w:1.5,d:1.3,h:2.2,c:0.8,col:'#3b5bdb'},
  {k:'blender',n:'เครื่องผสมแห้ง',w:2.0,d:1.6,h:2.5,c:0.8,col:'#3b5bdb'},
@@ -246,7 +246,7 @@ const r2=v=>Math.round(v*100)/100;
 const fmt=(v,n=2)=>(+v).toFixed(n);
 
 /* ====================== state ====================== */
-const S={rooms:[],machines:[],doors:[],flows:[],dims:[],bgHidden:[],bgErase:[],cfg:{minAisle:1.2,minDP:5,wallH:3.5,colorBy:'pa',ach:{...ACH_DEF},spec:{...SPEC_DEF}}};
+const S={rooms:[],machines:[],doors:[],flows:[],dims:[],bgHidden:[],bgErase:[],cfg:{minAisle:1.2,minDP:5,wallH:3.5,colorBy:'pa',groupMove:true,ach:{...ACH_DEF},spec:{...SPEC_DEF}}};
 let nextId=1;
 const U={paths:{},texts:[],origin:[0,0],loaded:false,vis:{},alpha:1,showText:false,p2d:{},cnt:{},bb:{},keys:{},hidden:new Set(),
   id:null,name:'',meta:null,raw:null,wallL:WALL_LAYERS,snapL:SNAP_LAYERS,defVis:DEF_VIS};
@@ -480,6 +480,15 @@ function vtxPt(r,i,x,y,mod){mod=mod||MOD;const rad=snapRad();if(mod.free)return{
   return{x:X,y:Y,k:refs.length?'ax':null,ref:refs[0],refs,ortho:refs.length>0}}
 /* moving a whole room: whichever of its corners comes near another corner snaps onto it;
    otherwise its edges line up with other rooms' corners */
+/* group move: what belongs to a room — machines standing in it, doors on (or in) its walls,
+   flow lines and dimension lines lying wholly in it. Positions are kept as they were when the drag began. */
+function roomMembers(r){const tol=0.15;
+  const edge=(x,y)=>{let d=1e9;for(let i=0;i<r.pts.length;i++){const a=r.pts[i],b=r.pts[(i+1)%r.pts.length];d=Math.min(d,segDist(x,y,a[0],a[1],b[0],b[1])[0])}return d};
+  const on=(x,y)=>pip(r.pts,x,y)||edge(x,y)<tol;
+  const M=S.machines.filter(m=>pip(r.pts,m.x,m.y)),D=S.doors.filter(d=>on(d.x,d.y)),F=S.flows.filter(f=>f.pts.every(p=>on(p[0],p[1]))),L=S.dims.filter(d=>on(...d.a)&&on(...d.b));
+  return{pt:[...M,...D].map(o=>({o,x:o.x,y:o.y})),fl:F.map(o=>({o,pts:o.pts.map(p=>p.slice())})),dm:L.map(o=>({o,a:o.a.slice(),b:o.b.slice()})),n:{m:M.length,d:D.length,f:F.length,l:L.length}}}
+function moveMembers(g,dx,dy){const mv=p=>[r2(p[0]+dx),r2(p[1]+dy)];
+  for(const q of g.pt){q.o.x=r2(q.x+dx);q.o.y=r2(q.y+dy)}for(const q of g.fl)q.o.pts=q.pts.map(mv);for(const q of g.dm){q.o.a=mv(q.a);q.o.b=mv(q.b)}}
 function moveSnap(r,pts,dx,dy,mod){mod=mod||MOD;if(!T.snap||mod.free)return[dx,dy,null];const rad=snapRad();
   let best=null,bd=1e9;
   for(const p of pts){const x=p[0]+dx,y=p[1]+dy,s=snapPt(x,y,rad,{mod,skipRoom:r,noAlign:true});if(s.k){const d=Math.hypot(s.x-x,s.y-y);if(d<bd){bd=d;best=[s.x-p[0],s.y-p[1],s]}}}
@@ -765,7 +774,7 @@ c2.addEventListener('pointerdown',e=>{
     if(h&&(h.type==='flow'||h.type==='dim')){setSel(h.type,h.obj.id);drag={t:'movepts',o:h.obj,type:h.type,lx:w[0],ly:w[1],sx:sp[0],sy:sp[1],moved:false,orig:JSON.parse(JSON.stringify(h.obj))};return}
     if(h&&h.type!=='room'){setSel(h.type,h.obj.id);drag={t:'move',o:h.obj,type:h.type,ox:h.obj.x-w[0],oy:h.obj.y-w[1],moved:false,sx:sp[0],sy:sp[1]};return}
     if(h&&h.type==='room'){
-      if(T.sel&&T.sel.id===h.obj.id){drag={t:'moveroom',r:h.obj,lx:w[0],ly:w[1],moved:false,sx:sp[0],sy:sp[1],pts:h.obj.pts.map(p=>p.slice())};return}
+      if(T.sel&&T.sel.id===h.obj.id){drag={t:'moveroom',r:h.obj,lx:w[0],ly:w[1],moved:false,sx:sp[0],sy:sp[1],pts:h.obj.pts.map(p=>p.slice()),grp:S.cfg.groupMove!==false?roomMembers(h.obj):null};return}
       drag={t:'taproom',r:h.obj,sx:sp[0],sy:sp[1],tx:V.tx,ty:V.ty,moved:false};return}
     drag={t:'pan',sx:sp[0],sy:sp[1],tx:V.tx,ty:V.ty,moved:false,desel:true};return}
   if(tool==='room'){const s=snapPt(w[0],w[1],snapRad());drag={t:'rect',p0:[s.x,s.y],sx:sp[0],sy:sp[1],moved:false};T.hover=s;return}
@@ -787,7 +796,7 @@ c2.addEventListener('pointermove',e=>{
   switch(drag.t){
     case'pan':case'taproom':case'tap':if(drag.moved||drag.t==='pan'&&drag.moved===true){V.tx=drag.tx+(sp[0]-drag.sx);V.ty=drag.ty+(sp[1]-drag.sy);if(T.tool!=='select')hoverUpdate(sp);render()}break;
     case'move':{if(!drag.moved)break;if(!drag.committed){commit();drag.committed=true}drag.o.x=r2(Math.round((w[0]+drag.ox)/0.05)*0.05);drag.o.y=r2(Math.round((w[1]+drag.oy)/0.05)*0.05);if(drag.type==='door'){const nw=nearWall(w[0],w[1],0.6);if(nw){drag.o.x=r2(nw.x);drag.o.y=r2(nw.y);drag.o.ang=nw.ang}}changed(true,true);break}
-    case'moveroom':{if(!drag.moved)break;if(!drag.committed){commit();drag.committed=true}const[ddx,ddy]=moveSnap(drag.r,drag.pts,w[0]-drag.lx,w[1]-drag.ly);drag.r.pts=drag.pts.map(p=>[r2(p[0]+ddx),r2(p[1]+ddy)]);changed(true,true);break}
+    case'moveroom':{if(!drag.moved)break;if(!drag.committed){commit();drag.committed=true}const[ddx,ddy]=moveSnap(drag.r,drag.pts,w[0]-drag.lx,w[1]-drag.ly);drag.r.pts=drag.pts.map(p=>[r2(p[0]+ddx),r2(p[1]+ddy)]);if(drag.grp){moveMembers(drag.grp,ddx,ddy);if(!drag.told){drag.told=true;const n=drag.grp.n;if(n.m||n.d||n.f||n.l)toast(`ย้ายพร้อม${n.m?` เครื่องจักร ${n.m}`:''}${n.d?` ประตู ${n.d}`:''}${n.f?` เส้นทาง ${n.f}`:''}${n.l?` เส้นบอกขนาด ${n.l}`:''}`)}}changed(true,true);break}
     case'vtx':{const s=vtxPt(drag.r,drag.i,w[0],w[1]);drag.r.pts[drag.i]=[s.x,s.y];T.hover=s;changed(true,true);break}
     case'rect':{const s=snapPt(w[0],w[1],snapRad());T.hover=s;T.pend=drag.p0;render();break}
     case'bgbox':{if(!drag.moved)break;let q=w;if(drag.erase){const s=snapPt(w[0],w[1],snapRad(),{noAlign:true});q=[s.x,s.y]}T.bgBox=[drag.p0,q];render();break}
@@ -917,7 +926,7 @@ function renderCtx(){
     +(T.bgMode==='erase'?'<span class="hint">ลากกรอบ: ตัดเฉพาะส่วนของเส้นที่อยู่ในกรอบ (เช่น ผนังที่จะทุบ) มุมกรอบดูดติดตาราง/ผนัง · ตาราง 1 ม. ไม่ถูกลบ</span>':'')
     +`<span class="hint">ลบไปแล้ว ${S.bgHidden.length} เส้น${S.bgErase.length?` · ยางลบ ${S.bgErase.length} กรอบ`:''}</span>`+(S.bgHidden.length||S.bgErase.length?'<button class="chip" data-act="bgrestore">คืนเส้นทั้งหมด</button>':'');
   else if(T.tool==='measure')h='<span class="hint">แตะ 2 จุดเพื่อวัดระยะ</span>';
-  else h='<span class="hint">แตะวัตถุเพื่อเลือก ลากเครื่องจักรหรือประตูเพื่อย้าย ลากพื้นที่ว่างเพื่อเลื่อนแบบ · ดับเบิลคลิกขอบห้อง = เพิ่มมุม · ดับเบิลคลิกมุม = ลบมุม</span>';
+  else h=`<button class="chip" data-act="group" aria-pressed="${S.cfg.groupMove!==false}">🔗 ย้ายห้องพร้อมของข้างใน</button>`+'<span class="hint">แตะวัตถุเพื่อเลือก ลากเครื่องจักรหรือประตูเพื่อย้าย ลากพื้นที่ว่างเพื่อเลื่อนแบบ · ดับเบิลคลิกขอบห้อง = เพิ่มมุม · ดับเบิลคลิกมุม = ลบมุม</span>';
   c.innerHTML=h;
 }
 function renderLegend(){
@@ -962,7 +971,7 @@ function propsHTML(){
     <label>ปริมาตร (ลบ.ม.)<input readonly value="${fmt(areaOf(o)*(+o.h||0),1)}"></label></div>
     <div class="pa">${PA_PRESETS.map(v=>`<button data-act="pa" data-v="${v}">${v} Pa</button>`).join('')}</div>
     <div class="row"><button class="btn dng" data-act="del">ลบห้อง</button></div>
-    <p class="muted">พิมพ์กว้าง/ยาวแล้วกด Enter: มุมซ้ายล่างอยู่ที่เดิม ขยายไปทางขวา/ขึ้นบน · ลากจุดวงกลมที่มุมเพื่อปรับรูปทรง · ลากในห้องเพื่อย้ายทั้งห้อง · เผลอลบหรือแก้ผิด กด Ctrl+Z</p>`;
+    <p class="muted">พิมพ์กว้าง/ยาวแล้วกด Enter: มุมซ้ายล่างอยู่ที่เดิม ขยายไปทางขวา/ขึ้นบน · ลากจุดวงกลมที่มุมเพื่อปรับรูปทรง · ลากในห้องเพื่อย้ายทั้งห้อง (เปิด 🔗 ที่แถบบน = เครื่องจักร ประตู เส้นทางในห้องย้ายตามด้วย) · เผลอลบหรือแก้ผิด กด Ctrl+Z</p>`;
   if(t==='machine')return `<h3>เครื่องจักร</h3><div class="f">
     <label class="w">ชื่อ<input data-p="name" value="${esc(o.name)}"></label>
     <label>กว้าง (ม.)<input type="number" step="0.05" min="0.1" data-p="w" value="${o.w}"></label>
@@ -1087,6 +1096,7 @@ $('#ctx').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)
   else if(b.dataset.flow){T.flow=FL(b.dataset.flow);renderCtx();render()}
   else if(b.dataset.act==='flowdone')finishFlow();
   else if(b.dataset.act==='flowundo'){T.fpts.pop();renderCtx();render()}
+  else if(b.dataset.act==='group'){S.cfg.groupMove=S.cfg.groupMove===false;autosave();renderCtx();toast(S.cfg.groupMove?'ย้ายห้อง: เครื่องจักร ประตู เส้นทาง ในห้องย้ายตามไปด้วย':'ย้ายห้อง: ย้ายแค่ห้อง ของข้างในอยู่ที่เดิม')}
   else if(b.dataset.act==='bglock'){T.bgLock=!T.bgLock;T.bgHover=null;renderCtx();render()}
   else if(b.dataset.act==='bgmode'){T.bgMode=b.dataset.v;T.bgHover=null;renderCtx();render()}
   else if(b.dataset.act==='bgtile'){T.bgTile=!T.bgTile;renderCtx()}
@@ -1315,7 +1325,7 @@ async function init(){
   try{const qp=new URLSearchParams(location.search).get('project');if(qp){const o=await (await fetch(qp,{cache:'no-store'})).json();if(o&&o.rooms){layoutFor(o);applyProj(o);nextId=Math.max(o.nextId||1,nextId);changed();fitView();setCur(null);updTitle('เปิดจาก '+qp)}}}catch(e){toast('เปิดไฟล์โครงการจากลิงก์ไม่ได้')}
   if(!had&&!S.rooms.length){/* start empty with the underlay; demo is in the menu */}
 }
-window.__app={useLayout,getLayouts,normLayout,loadProjObj,saveDraft,openDraft,getDrafts,draftsDialog,quickSave,S,T,V,U,V3,findBg,boxBg,hideBg,finishFlow,tapTool,hitTest,doorHit,orthoPt,vtxPt,moveSnap,snapPt,eraseBg,gridNear,pieces,editVertexAt,MOD,resizeRoom,roomSize,cancelDraw,delSel,doUndo,rebuildUnderlay,sumHTML,propsHTML,commit,changed,runChecks,loadDemo,setView,fitView,doorGeom,machinePoly,dxfStr,csvStr,zipBlob,projectJSON,setSel,render};
+window.__app={useLayout,getLayouts,normLayout,loadProjObj,saveDraft,openDraft,getDrafts,draftsDialog,quickSave,S,T,V,U,V3,findBg,boxBg,hideBg,finishFlow,tapTool,hitTest,doorHit,roomMembers,moveMembers,orthoPt,vtxPt,moveSnap,snapPt,eraseBg,gridNear,pieces,editVertexAt,MOD,resizeRoom,roomSize,cancelDraw,delSel,doUndo,rebuildUnderlay,sumHTML,propsHTML,commit,changed,runChecks,loadDemo,setView,fitView,doorGeom,machinePoly,dxfStr,csvStr,zipBlob,projectJSON,setSel,render};
 init();
 </script>
 </body>
